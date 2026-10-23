@@ -37,10 +37,10 @@ if "tax_year_used" not in st.session_state:
     st.session_state.tax_year_used = 2026
 if "loss_cf_used" not in st.session_state:
     st.session_state.loss_cf_used = 0.0
-if "show_ai_section" not in st.session_state:
-    st.session_state.show_ai_section = False
-if "ai_inline_messages" not in st.session_state:
-    st.session_state.ai_inline_messages = []
+if "open_ai_modal" not in st.session_state:
+    st.session_state.open_ai_modal = False
+if "ai_modal_messages" not in st.session_state:
+    st.session_state.ai_modal_messages = []
 
 # Sleek Midnight Slate & Electric Blue Design System CSS (100% Green-Free)
 st.markdown("""
@@ -279,7 +279,7 @@ TRANSLATIONS = {
         "ai_title": "AI Polish Tax & Compliance Advisor",
         "ai_sub": "Ask questions about PIT-38, PIT-ZG schedules, Art. 11a NBP rules, or app navigation. Powered by OpenRouter free models.",
         "ai_privacy_note": "🔒 Privacy Guarantee: Your raw CSV transaction records and financial figures are NEVER transmitted to OpenRouter.",
-        "floating_ai_label": "Ask AI Tax Assistant"
+        "floating_ai_label": "Ask question to AI agent"
     },
     "PL": {
         "locale_header": "Wybierz Język",
@@ -330,7 +330,7 @@ TRANSLATIONS = {
         "ai_title": "Inteligentny Doradca Podatkowy PIT (AI)",
         "ai_sub": "Zadawaj pytania dotyczące PIT-38, załącznika PIT-ZG, zasad NBP z art. 11a lub obsługi aplikacji. Napędzany darmowymi modelami OpenRouter.",
         "ai_privacy_note": "🔒 Gwarancja prywatności: Twoje surowe transakcje z pliku CSV oraz poufne kwoty finansowe NIGDY nie są przesyłane do OpenRouter.",
-        "floating_ai_label": "Zapytaj asystenta AI"
+        "floating_ai_label": "Zapytaj agenta AI"
     }
 }
 
@@ -369,6 +369,41 @@ def query_openrouter_ai(api_key, messages):
             return f"Error from OpenRouter API (Status {response.status_code}): {response.text}"
     except Exception as e:
         return f"Connection Error: {str(e)}"
+
+# Define Original Gorgeous AI Chat Modal Dialog
+@st.dialog("🤖 AI Tax Advisor")
+def ai_chat_modal():
+    t_local = TRANSLATIONS.get(st.session_state.get("lang_code", "EN"), TRANSLATIONS["EN"])
+    st.markdown(f"<p style='color: #8b949e; font-size: 0.85rem; margin-bottom: 12px;'>{t_local['ai_sub']}</p>", unsafe_allow_html=True)
+    st.markdown(f'<div class="custom-success-box">{t_local["ai_privacy_note"]}</div>', unsafe_allow_html=True)
+    
+    env_api_key = os.getenv("OPENROUTER_API_KEY", "")
+    if not env_api_key:
+        try:
+            env_api_key = st.secrets.get("OPENROUTER_API_KEY", "")
+        except Exception:
+            env_api_key = ""
+
+    openrouter_key = env_api_key if env_api_key else st.text_input("OpenRouter API Key", type="password", key="modal_openrouter_key")
+        
+    for message in st.session_state.ai_modal_messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+            
+    if prompt := st.chat_input("Ask a Polish tax or app question..."):
+        if not openrouter_key:
+            st.warning("Please configure your OPENROUTER_API_KEY in your .env file or Streamlit Secrets.")
+        else:
+            st.session_state.ai_modal_messages.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.markdown(prompt)
+                
+            with st.chat_message("assistant"):
+                with st.spinner("Analyzing tax regulations..."):
+                    api_messages = [{"role": m["role"], "content": m["content"]} for m in st.session_state.ai_modal_messages]
+                    ai_reply = query_openrouter_ai(openrouter_key, api_messages)
+                    st.markdown(ai_reply)
+                    st.session_state.ai_modal_messages.append({"role": "assistant", "content": ai_reply})
 
 def clean_pdf_text(text: str) -> str:
     replacements = {
@@ -823,44 +858,11 @@ else:
     </div>
     """, unsafe_allow_html=True)
 
-# --- COLLAPSIBLE INLINE AI ASSISTANT SECTION ---
-if st.session_state.show_ai_section:
-    st.markdown("---")
-    st.markdown(f"### {t['ai_title']}")
-    st.markdown(f"<p style='color: #8b949e; font-size: 0.85rem; margin-bottom: 8px;'>{t['ai_sub']}</p>", unsafe_allow_html=True)
-    st.markdown(f'<div class="custom-success-box">{t["ai_privacy_note"]}</div>', unsafe_allow_html=True)
-    
-    env_api_key = os.getenv("OPENROUTER_API_KEY", "")
-    if not env_api_key:
-        try:
-            env_api_key = st.secrets.get("OPENROUTER_API_KEY", "")
-        except Exception:
-            env_api_key = ""
-
-    openrouter_key = env_api_key if env_api_key else st.text_input("OpenRouter API Key", type="password", key="inline_openrouter_key")
-        
-    for message in st.session_state.ai_inline_messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-            
-    if prompt := st.chat_input("Ask a Polish tax or app question...", key="inline_chat_input"):
-        if not openrouter_key:
-            st.warning("Please configure your OPENROUTER_API_KEY in your .env file or Streamlit Secrets.")
-        else:
-            st.session_state.ai_inline_messages.append({"role": "user", "content": prompt})
-            with st.chat_message("user"):
-                st.markdown(prompt)
-                
-            with st.chat_message("assistant"):
-                with st.spinner("Analyzing tax regulations..."):
-                    api_messages = [{"role": m["role"], "content": m["content"]} for m in st.session_state.ai_inline_messages]
-                    ai_reply = query_openrouter_ai(openrouter_key, api_messages)
-                    st.markdown(ai_reply)
-                    st.session_state.ai_inline_messages.append({"role": "assistant", "content": ai_reply})
-    
-    if st.button("❌ Close AI Assistant", key="close_ai_btn"):
-        st.session_state.show_ai_section = False
-        st.rerun()
+# Trigger AI Chat Modal smoothly ONLY when explicitly clicked
+if st.session_state.open_ai_modal:
+    ai_chat_modal()
+    # Reset flag immediately so background app reruns (file uploads) won't reopen it!
+    st.session_state.open_ai_modal = False
 
 # Explicitly load icon from local path or fallback to SVG robot
 ai_icon_paths = [
@@ -883,7 +885,7 @@ else:
     svg_b64 = base64.b64encode(svg_robot.encode("utf-8")).decode("utf-8")
     button_bg_css = f'background: linear-gradient(135deg, #1f6feb 0%, #1158c7 100%) url("data:image/svg+xml;base64,{svg_b64}") no-repeat center center !important; background-size: 32px 32px !important;'
 
-floating_label = t.get("floating_ai_label", "Ask AI Tax Assistant")
+floating_label = t.get("floating_ai_label", "Ask question to AI agent")
 
 st.markdown(f"""
 <style>
@@ -940,5 +942,5 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 if st.button("🤖", key="ai_robot_fab"):
-    st.session_state.show_ai_section = not st.session_state.show_ai_section
+    st.session_state.open_ai_modal = True
     st.rerun()
