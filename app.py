@@ -30,6 +30,18 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Initialize Session State Variables safely
+if "calculated_data" not in st.session_state:
+    st.session_state.calculated_data = None
+if "tax_year_used" not in st.session_state:
+    st.session_state.tax_year_used = 2026
+if "loss_cf_used" not in st.session_state:
+    st.session_state.loss_cf_used = 0.0
+if "open_ai_modal" not in st.session_state:
+    st.session_state.open_ai_modal = False
+if "ai_modal_messages" not in st.session_state:
+    st.session_state.ai_modal_messages = []
+
 # Sleek Midnight Slate & Electric Blue Design System CSS (100% Green-Free)
 st.markdown("""
 <style>
@@ -54,7 +66,6 @@ st.markdown("""
         border-right: 1px solid #30363d;
     }
     
-    /* Compact sidebar padding to move contents and button higher up */
     [data-testid="stSidebar"] .block-container {
         padding-top: 0.6rem;
         padding-bottom: 1rem;
@@ -377,17 +388,14 @@ def ai_chat_modal():
         openrouter_key = env_api_key
     else:
         openrouter_key = st.text_input("OpenRouter API Key", type="password", key="modal_openrouter_key")
-    
-    if "ai_modal_messages" not in st.session_state:
-        st.session_state.ai_modal_messages = []
-        
+            
     for message in st.session_state.ai_modal_messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
             
     if prompt := st.chat_input("Ask a Polish tax or app question..."):
         if not openrouter_key:
-            st.warning("Please configure your OPENROUTER_API_KEY in your .env file.")
+            st.warning("Please configure your OPENROUTER_API_KEY in your .env file or Streamlit Secrets.")
         else:
             st.session_state.ai_modal_messages.append({"role": "user", "content": prompt})
             with st.chat_message("user"):
@@ -624,13 +632,6 @@ def generate_steps_csv(calc_data, lang_code="EN"):
     df_steps = pd.DataFrame(formatted_steps)
     return df_steps.to_csv(index=False).encode('utf-8')
 
-if "calculated_data" not in st.session_state:
-    st.session_state.calculated_data = None
-if "tax_year_used" not in st.session_state:
-    st.session_state.tax_year_used = 2026
-if "loss_cf_used" not in st.session_state:
-    st.session_state.loss_cf_used = 0.0
-
 with st.sidebar:
     temp_lang_choice = st.radio("Choose Language / Wybierz Język", ["English", "Polski"], index=0, label_visibility="collapsed")
     lang_code = "EN" if temp_lang_choice == "English" else "PL"
@@ -860,11 +861,11 @@ else:
     </div>
     """, unsafe_allow_html=True)
 
-# Trigger AI Chat Modal smoothly if open in session state
-if st.session_state.get("open_ai_modal", False):
+# Conditionally trigger AI Chat Modal based strictly on session state boolean
+if st.session_state.open_ai_modal:
     ai_chat_modal()
 
-# Explicitly load icon from /home/bart/pit38-ibkr-agent/ai_robot_icon.png
+# Explicitly load icon from local path or fallback to SVG robot
 ai_icon_paths = [
     "/home/bart/pit38-ibkr-agent/ai_robot_icon.png",
     "ai_robot_icon.png",
@@ -942,5 +943,5 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 if st.button("🤖", key="ai_robot_fab"):
-    st.session_state.open_ai_modal = not st.session_state.get("open_ai_modal", False)
+    st.session_state.open_ai_modal = not st.session_state.open_ai_modal
     st.rerun()
