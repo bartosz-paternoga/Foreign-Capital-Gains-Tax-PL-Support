@@ -60,3 +60,7 @@ Run the offline parser, FIFO, multi-currency/year, reconciliation, export, round
     python -m unittest discover -s tests -v
 
 The tests mock NBP responses and do not need network access.
+
+## Copyright
+
+Copyright © 2026 Bartosz Paternoga. All rights reserved. No general license is granted to use, modify, or distribute this software.
