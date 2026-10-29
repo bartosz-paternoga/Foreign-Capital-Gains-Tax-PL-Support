@@ -1,5 +1,6 @@
-streamlit
+streamlit>=1.51,<2.0
 pandas
 requests
 python-dotenv
 reportlab
+psycopg[binary,pool]>=3.2,<4

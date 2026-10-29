@@ -24,9 +24,9 @@ Uploaded CSVs and calculation results remain in the current Streamlit session; t
 
 For single-user local development without a PostgreSQL database:
 
-    FOREIGN_TAX_LOCAL_DEV_MODE=1 streamlit run app.py
+    ETF_APP_LOCAL_DEV_MODE=1 streamlit run app.py
 
-This local-only mode bypasses login. To test account login locally, provide a PostgreSQL DATABASE_URL and the bootstrap administrator secrets instead. Do not deploy with FOREIGN_TAX_LOCAL_DEV_MODE enabled.
+This local-only mode bypasses login. The app also accepts FOREIGN_TAX_LOCAL_DEV_MODE as an alias. To test account login locally, provide a PostgreSQL DATABASE_URL and the bootstrap administrator secrets instead. Do not deploy with either local-development flag enabled.
 
 Install dependencies with:
 
