@@ -10,6 +10,17 @@ A Streamlit workspace for Polish foreign-capital-gains tax calculations and PIT-
 
 The intended scope is an IBKR Ireland calculation pack. It reports the IBKR contribution for manual consolidation with other broker documents; it is not a multi-broker return preparer.
 
+## AI assistance
+
+The app includes optional, question-based AI help at two points in the workflow:
+
+- **Import and settings help:** Ask in plain language about detected import issues, column mappings, required settings, and how app features work. The assistant can use a detailed guide to the app together with the file format, transaction counts, issue codes, and selected safe settings to explain what needs review.
+- **Calculation-results help:** Ask follow-up questions about the current calculation. The assistant receives selected aggregate PLN figures and review/reconciliation statuses, along with the same app guide, so it can explain what the results mean and which assumptions still need checking.
+- **Interactive follow-up:** Each panel accepts typed questions and follow-ups; up to eight recent messages are included so the conversation can use its recent context. Chat history stays in the current Streamlit session.
+- **User-controlled and read-only:** AI is optional, and the consent checkbox must be enabled before you can send a message. It does not run or modify tax calculations, change app settings, or mark review items resolved, and AI responses are not included in the PDF/CSV tax-office working papers. Treat its responses as explanations to check, not tax advice.
+
+Configure `OPENROUTER_API_KEY` in the server environment or Streamlit Secrets to enable it; `OPENROUTER_MODEL` defaults to `openrouter/free`. A request sends the question, up to eight recent messages, the app guide, safe selected-setting indicators, and the relevant whitelisted import or results summary. The app does not attach the uploaded CSV, preview rows, transaction ledger, account identifiers, ticker names or mapping text, or entered unit quantities. Anything typed into a question is sent. OpenRouter may route requests to providers with their own data policies, so review those policies before using AI assistance.
+
 ## Look and feel
 
 The app uses the same light slate theme, typography, component styling, and sidebar brand treatment as Investment Copilot.
@@ -25,8 +36,6 @@ Both app.py and agent.py use the same PostgreSQL-backed, administrator-provision
 Use the same DATABASE_URL as Investment Copilot to share its account registry. With a separate database, the first configured bootstrap administrator creates that app's account registry. Public self-registration is disabled. Administrators can create accounts, issue temporary passwords, reset passwords, and disable or reactivate accounts from the sidebar. New accounts must change their temporary password at first sign-in.
 
 Uploaded CSVs and calculation results remain in the current Streamlit session; the app does not save a user's tax records to PostgreSQL.
-
-Optional AI chat is available for import questions before calculation and result questions after calculation. Each chat requires consent. Configure `OPENROUTER_API_KEY` in the server environment or Streamlit Secrets; `OPENROUTER_MODEL` defaults to `openrouter/free`. Each request sends the typed question, up to eight recent chat messages, a detailed guide to the app workflow/settings/calculations/reports, safe selected-setting indicators, and the relevant whitelisted import or result summary. The app does not attach the CSV, preview rows, ticker names or mapping text, account identifiers, or entered unit quantities; anything typed into a question is sent. Chat history stays in the current Streamlit session. OpenRouter may route requests to providers with different retention and training policies; review those policies before using chat. AI text does not affect calculations and is not included in tax-office exports.
 
 ## Local development
 
