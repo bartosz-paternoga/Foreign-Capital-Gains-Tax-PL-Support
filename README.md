@@ -6,80 +6,67 @@
 >
 > **NO WARRANTY; LIMITATION OF LIABILITY.** The software and its reports are provided “AS IS,” without warranties of any kind, to the fullest extent permitted by applicable law. This is not tax or legal advice; independently verify every result before relying on it. To the fullest extent permitted by applicable law, the author disclaims liability for loss, damages, tax assessments, penalties, or claims arising from access to, use of, inability to use, or reliance on the software. Nothing in this notice excludes liability that cannot lawfully be excluded. Third-party components remain subject to their own licenses.
 
-A Streamlit workspace for Polish foreign-capital-gains tax calculations and PIT-38 / PIT-ZG audit reports.
+An IBKR-focused calculation and evidence workspace for preparing the Interactive Brokers contribution to Polish PIT-38 and PIT/ZG working papers.
 
-The intended scope is an IBKR Ireland calculation pack. It reports the IBKR contribution for manual consolidation with other broker documents; it is not a multi-broker return preparer.
+It is designed for manual consolidation: calculate and document the IBKR activity here, then combine it with Polish broker statements and other tax records in your final return. It is not a multi-broker tax-return preparer or filing service.
 
-## AI assistance
+## How the AI fits
 
-The app includes optional, question-based AI help at two points in the workflow:
+**The calculation engine calculates; the AI explains.** Tax figures are produced by the application’s rule-based calculation code. The optional OpenRouter assistant cannot run, edit, approve, or change those calculations.
 
-- **Import and settings help:** Ask in plain language about detected import issues, column mappings, required settings, and how app features work. The assistant can use a detailed guide to the app together with the file format, transaction counts, issue codes, and selected safe settings to explain what needs review.
-- **Calculation-results help:** Ask follow-up questions about the current calculation. The assistant receives selected aggregate PLN figures and review/reconciliation statuses, along with the same app guide, so it can explain what the results mean and which assumptions still need checking.
-- **Interactive follow-up:** Each panel accepts typed questions and follow-ups; up to eight recent messages are included so the conversation can use its recent context. Chat history stays in the current Streamlit session.
-- **User-controlled and read-only:** AI is optional, and the consent checkbox must be enabled before you can send a message. It does not run or modify tax calculations, change app settings, or mark review items resolved, and AI responses are not included in the PDF/CSV tax-office working papers. Treat its responses as explanations to check, not tax advice.
+The assistant supports questions in two parts of the workflow:
 
-Configure `OPENROUTER_API_KEY` in the server environment or Streamlit Secrets to enable it; `OPENROUTER_MODEL` defaults to `openrouter/free`. A request sends the question, up to eight recent messages, the app guide, safe selected-setting indicators, and the relevant whitelisted import or results summary. The app does not attach the uploaded CSV, preview rows, transaction ledger, account identifiers, ticker names or mapping text, or entered unit quantities. Anything typed into a question is sent. OpenRouter may route requests to providers with their own data policies, so review those policies before using AI assistance.
+- **Before calculation:** explain import checks, column mappings, configuration settings, and app behavior. It receives the detected file format, transaction-type counts, issue codes, safe setting indicators, and a detailed guide to the app.
+- **After calculation:** explain selected aggregate PLN figures, calculation status, and review or reconciliation categories in plain language. You can ask follow-up questions; up to eight recent chat messages are sent for context.
 
-## Look and feel
+Each panel is gated by a consent checkbox. A request sends your question, recent messages, the app guide, limited settings, and the relevant summary. The app does not attach the original CSV, preview rows, transaction ledger, account identifiers, ticker names, country-mapping text, or entered unit quantities. **Anything you type into a question is sent.** OpenRouter may route requests to other providers; check their data policies before using the assistant. AI answers can be wrong, are not tax advice, and are not included in exported working papers.
 
-The app uses the same light slate theme, typography, component styling, and sidebar brand treatment as Investment Copilot.
+To enable AI, set OPENROUTER_API_KEY in the server environment or Streamlit Secrets. OPENROUTER_MODEL is optional and defaults to openrouter/free.
 
-## Login and user management
+## What the calculation and reports cover
 
-Both app.py and agent.py use the same PostgreSQL-backed, administrator-provisioned account flow as Investment Copilot. Set these values in Streamlit Secrets:
+- Reads original IBKR transaction-history CSV exports, including the embedded transaction table after the report preamble, and keeps source-row references. A normalized transaction CSV is also supported. Review the detected columns and any import issues before calculating.
+- Builds FIFO inventory from imported buys and matches sales to the oldest available lots for the same symbol. The imported history must contain the acquisition basis for sold units; a sale without enough FIFO inventory stops the calculation.
+- Converts supported foreign-currency amounts using NBP Table A rates effective before the transaction date. The calculation records the rate, effective date, table number, and source reference. It stops rather than inventing a rate when NBP cannot verify one.
+- Separates security disposals from interest, dividends, and withholding. Cash currency and source-country settings are explicit inputs when the statement does not establish them.
+- Reconciles opening units, buys, sells, transfers, reported corporate-action changes, and closing units against IBKR snapshots. A unit match checks quantities only; it does not prove the tax basis or classification.
+- Lists excluded IBKR activity, including FX components, FX translation adjustments, deposits, and withdrawals. Their exclusion from this securities and investment-income calculation does not determine the separate tax treatment of any currency-exchange gain.
+- Flags unresolved countries, prior-year loss assumptions, corporate actions, transfers, unsupported activity, and reconciliation gaps for review. A completed calculation is not automatically filing-ready.
 
-    DATABASE_URL = "postgresql://..."
-    BOOTSTRAP_ADMIN_USERNAME = "admin"
-    BOOTSTRAP_ADMIN_PASSWORD = "use-a-unique-random-password-of-at-least-12-characters"
+The downloadable support package contains a Polish dossier PDF, summary CSV, transaction-level ledger CSV, NBP rate schedule, excluded-activity schedule, and a source-file SHA-256 fingerprint. The original source CSV can optionally be included in the ZIP. Keep it and the supporting broker records: the working papers do not replace statements, trade confirmations, withholding certificates, position snapshots, or transfer and corporate-action documents.
 
-Use the same DATABASE_URL as Investment Copilot to share its account registry. With a separate database, the first configured bootstrap administrator creates that app's account registry. Public self-registration is disabled. Administrators can create accounts, issue temporary passwords, reset passwords, and disable or reactivate accounts from the sidebar. New accounts must change their temporary password at first sign-in.
+## Form mapping and limits
 
-Uploaded CSVs and calculation results remain in the current Streamlit session; the app does not save a user's tax records to PostgreSQL.
+The reports show IBKR-only contributions. In the currently coded PIT/ZG(8) crosswalk, the country table identifies positions 6 and 7 and candidate figures for positions 29 and 30. Position 30 is foreign tax paid on position 29 income before the form’s credit limit. Enter the full country name for position 6 and verify the target-year form and source-country treatment before filing. The form version and instructions may change by tax year.
 
-## Local development
+Interest and dividends are supporting detail for PIT-38 Section G; they are not PIT/ZG positions 29–30. The app does not calculate PIT/ZG positions 31–32 for virtual-currency income.
 
-For single-user local development without a PostgreSQL database:
+The app’s displayed position 35 and position 49 figures are IBKR-only estimates. They do not calculate final PIT-38 position 51 or incorporate other brokers, other income, or all return-level credit limits. Add the other sources and recalculate the combined return. For capital-gains foreign tax, position 34 and the amount ultimately deductible must be checked against the proportional limit using the complete Polish and foreign income.
 
-    ETF_APP_LOCAL_DEV_MODE=1 streamlit run app.py
+Security classifications and source countries are not inferred from an IBKR account, ticker, or exchange. Verify each instrument and country from relevant documents and applicable rules. Transfers and corporate actions can affect unit reconciliation, but the app does not infer their tax-basis treatment. A transferred position without its original basis must be resolved before relying on a later sale.
 
-This local-only mode bypasses login. The app also accepts FOREIGN_TAX_LOCAL_DEV_MODE as an alias. To test account login locally, provide a PostgreSQL DATABASE_URL and the bootstrap administrator secrets instead. Do not deploy with either local-development flag enabled.
+## Account access and data
 
-Install dependencies with:
+Hosted access is provisioned by an administrator; public self-registration is disabled. Using the same PostgreSQL DATABASE_URL as Investment Copilot shares its administrator and user registry. PostgreSQL stores account-management records, not uploaded tax files or calculation results; those remain in the active Streamlit session.
+
+For hosted use, configure DATABASE_URL, BOOTSTRAP_ADMIN_USERNAME, and BOOTSTRAP_ADMIN_PASSWORD in Streamlit Secrets. Administrators create and manage user accounts; users must change temporary passwords at first sign-in.
+
+## Run locally
+
+Install dependencies:
 
     python -m pip install -r requirements.txt
 
-## Import and calculation safeguards
+Start a single-user local session without a database:
 
-- The Import Check runs before calculation. It shows the detected IBKR table, selected column mapping, transaction-type counts, sample source rows, and explicit FX/cash rows excluded from PIT-38. If a header is unfamiliar or ambiguous, select its meaning manually; calculation stays disabled while required columns or invalid dates are unresolved. Unrecognized security activity requires an explicit review acknowledgement and remains excluded/flagged.
-- The importer accepts IBKR transaction CSV layouts; it is not a universal parser for every broker or file type. Add and test a provider-specific adapter before using a different broker's export.
-- Upload the original IBKR transaction-history report CSV. The importer finds the embedded Transaction History table after the report preamble, reads it directly, and keeps the original CSV row references; no column rearranging or editing is needed. The existing normalized transaction CSV format is still supported.
-- An optional blank CSV upload template is available beside the upload control for manually prepared transaction files. Keep its headers and enter one transaction per row; original IBKR exports can still be uploaded directly.
-- Explicit IBKR `Forex Trade Component` currency-pair rows, `FX Translations P&L` adjustments, deposits, and withdrawals are left out of PIT-38 security and investment-income calculations and listed in the excluded-activity audit schedule. Excluding a row from this PIT-38 calculation does not decide whether the underlying currency exchange has a separate tax treatment; review that separately before filing.
-- The importer processes the selected CSV only. It does not substitute another file when the requested file is missing.
-- Buy and sell directions prefer IBKR's Transaction Type field. Transactions are ordered by date, and a sale exceeding the available FIFO holdings stops the run.
-- The Account Reconciliation tab tracks opening units, buys, sells, incoming/outgoing transfers, reported corporate-action unit changes, calculated closing units, IBKR closing units, and the difference by ticker. Enter opening and IBKR closing quantities in the sidebar as `SYMBOL=quantity`; quantities may be fractional. If the upload starts from a verified zero position, confirm the zero-opening checkbox.
-- IBKR `REC`, `DEL`, and `CORP` records are included in unit reconciliation using their reported quantities. Their tax-basis treatment is not inferred. Transfers and corporate actions remain review items, and a sale without the acquired lot's basis stops FIFO tax calculation.
-- A reconciliation mismatch is calculated closing units minus IBKR-reported closing units. If the opening quantity, closing quantity, or an event quantity is missing, the status says what is needed and does not claim a match.
-- IBKR cancel/correction records stop tax calculations until matched to the original trade. Cash dividends and interest accrual rows are distinguished; accruals are not automatically treated as paid income.
-- Cash rows whose currency is absent need the account currency. The cash-account country applies to interest and its withholding; dividends and security-related withholding use the mapped security source country. Missing country attribution is marked for review.
-- NBP Table A rates must be fetched successfully. The calculation records the API's effective date and stops if a rate cannot be verified; there is no estimated-rate fallback.
-- Interest and dividends are calculated separately from security disposals. Foreign tax credits are capped at the Polish tax for the associated passive income; tax paid and the uncredited amount are shown separately.
-- A prior-year loss is an amount entered by the user. Marking it verified means the user has checked its source, five-year period, and annual limit; the app does not validate those historical facts.
-- Unsupported rows, unresolved countries, unverified prior losses, and calculation errors must be reviewed. A clean import status only means the supported rows passed the app's checks; it does not mean the return is filing-ready. Exports are working papers and do not constitute a completed tax return.
-- The displayed tax due combines only PIT-38 positions 35 and 49 from supported imported records. It is not position 51: positions 45, 46, and 50 are outside the app's calculation and must be considered separately.
-- For manual consolidation, use IBKR proceeds/costs as the contribution to positions 22/23. Add domestic broker PIT-8C figures in positions 20/21, then recalculate the combined positions 26–35. Combine foreign passive income and withholding from all sources before finalizing positions 47–49.
-- Confirm each security's Polish tax classification and source-country treatment against the instrument documents and applicable rules before relying on a PIT/ZG summary.
-- PDF and CSV working papers include transaction math with NBP rate/effective date, the passive-tax credit cap, account-unit events and reconciliation, and unresolved review notes.
-- The Polish tax-office support ZIP adds a print-ready PDF dossier with a full transaction ledger and NBP rate appendix, plus matching CSV schedules. It includes an IBKR source-file SHA-256 fingerprint, source-record references, PIT-38/PIT-ZG contribution tables, unit reconciliation, and translated review notes. Including the original IBKR CSV is optional.
-- The app and exports include a PIT/ZG(8) form crosswalk per country: positions 6 (full country name), 7 (two-letter country code), 29 (Art. 30b(5a)/(5b) income), and 30 (foreign tax paid on position 29 income before the credit limit). The figures are IBKR-only; confirm source-country treatment and combine other sources for each country. Taxpayer details in positions 1–5 must be entered manually. Positions 31–32 for virtual-currency income are outside the app's scope. Art. 30a interest/dividends are supporting detail for PIT-38 Section G positions 47–49, not PIT/ZG fields.
-- The complete print-ready dossier PDF is also available as a standalone download, alongside the summary and detailed CSV files.
-- The dossier is a supporting working paper, not an official PIT-38/PIT-ZG form or a replacement for IBKR statements, trade confirmations, tax vouchers, position snapshots, or corporate-action/transfer records. Keep the source documents and provide them if requested.
+    ETF_APP_LOCAL_DEV_MODE=1 streamlit run app.py
 
-## Regression tests
+This development flag bypasses login and must not be enabled in a hosted deployment. FOREIGN_TAX_LOCAL_DEV_MODE is also accepted as an alias. To test the hosted login flow locally, provide a PostgreSQL DATABASE_URL and bootstrap administrator credentials instead.
 
-Run the offline parser, FIFO, multi-currency/year, reconciliation, export, rounding, rate-source, and tax-credit checks with:
+## Regression checks
+
+Run the offline parser, FIFO, multi-year and multi-currency, account-reconciliation, export, rounding, NBP-source, and tax-credit tests:
 
     python -m unittest discover -s tests -v
 
-The tests mock NBP responses and do not need network access.
+The regression suite mocks NBP responses; it checks application behavior, not current tax advice or the legal treatment of a specific instrument.
