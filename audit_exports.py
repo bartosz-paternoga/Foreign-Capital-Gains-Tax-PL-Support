@@ -110,12 +110,23 @@ def generate_steps_csv(calc_data, lang_code="EN"):
     steps = calc_data.get("Calculation_Steps", [])
     formatted_steps = []
     for step in steps:
+        fifo_allocations = " | ".join(
+            f"buy row {match.get('Buy source row') or 'unrecorded'} on {match.get('Buy date') or '—'}: "
+            f"{float(match.get('Matched quantity') or 0):g} units × "
+            f"{float(match.get('Unit cost (PLN)') or 0):.4f} PLN/unit "
+            f"= {float(match.get('Allocated cost (PLN)') or 0):.4f} PLN; "
+            f"NBP {match.get('Buy NBP rate') or '—'} effective {match.get('Buy NBP date') or '—'}, "
+            f"table {match.get('Buy NBP table') or '—'}"
+            for match in step.get("FIFO_Matches", [])
+        )
         formatted_steps.append({
             "Record type": "Tax transaction",
             "Rok / Year": step["Year"],
             "Data / Date": step["Date"],
             "Data Kursu NBP / NBP Date": step["NBP Date"],
             "Operacja / Action": step["Action_PL"] if lang_code == "PL" else step["Action_EN"],
+            "Kraj zrodla / Source country": step.get("Source country"),
+            "Rodzaj dochodu / Income type": step.get("Income type"),
             "Ticker": step["Ticker"],
             "Waluta / Currency": step["Curr"],
             "Ilość / Quantity": step["Qty"],
@@ -125,6 +136,8 @@ def generate_steps_csv(calc_data, lang_code="EN"):
             "Przychód PLN / Revenue (PLN)": step["Revenue (PLN)"],
             "Koszt PLN / Cost Basis (PLN)": step["Cost Basis (PLN)"],
             "Dochód PLN / Net (PLN)": step["Net (PLN)"],
+            "Podatek zagraniczny / Foreign tax (PLN)": step.get("Foreign tax (PLN)"),
+            "Alokacje kosztu FIFO / FIFO allocations": fifo_allocations,
             "Wzór & FIFO / Audit Formula": step["Details_PL"] if lang_code == "PL" else step["Details_EN"],
         })
 

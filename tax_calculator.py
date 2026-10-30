@@ -170,6 +170,7 @@ class PIT38Calculator:
             unit_cost_pln = price_fx * rate + commission_pln / quantity
             self.buy_inventory.setdefault(ticker, []).append({
                 "quantity": quantity,
+                "original_quantity": quantity,
                 "unit_cost_pln": unit_cost_pln,
                 "date": date,
                 "price_fx": price_fx,
@@ -179,6 +180,7 @@ class PIT38Calculator:
                 "nbp_table": getattr(quote, "table_number", None),
                 "source_row": source_row,
                 "commission_fx": commission_fx,
+                "commission_pln": commission_pln,
             })
             total_buy_cost = _money(quantity * price_fx * rate + commission_pln)
             self.calculation_steps.append({
@@ -188,6 +190,8 @@ class PIT38Calculator:
                 "NBP Table": getattr(quote, "table_number", None),
                 "NBP Source": _nbp_source_url(currency, quote.effective_date),
                 "Source row": source_row,
+                "Source country": country,
+                "Unit cost (PLN)": unit_cost_pln,
                 "Action_EN": "BUY (FIFO inventory)",
                 "Action_PL": "KUPNO (magazyn FIFO)",
                 "Ticker": ticker,
@@ -218,16 +222,33 @@ class PIT38Calculator:
         sale_cost = commission_pln
         matched_layers = []
         matched_layers_pl = []
+        fifo_matches = []
         while remaining > EPSILON:
             layer = inventory[0]
             matched_quantity = min(float(layer["quantity"]), remaining)
-            sale_cost += matched_quantity * float(layer["unit_cost_pln"])
+            unit_cost_pln = float(layer["unit_cost_pln"])
+            allocated_cost_pln = matched_quantity * unit_cost_pln
+            sale_cost += allocated_cost_pln
+            fifo_matches.append({
+                "Buy date": layer["date"],
+                "Buy source row": layer.get("source_row"),
+                "Matched quantity": matched_quantity,
+                "Original buy quantity": layer.get("original_quantity"),
+                "Buy price (FX)": layer.get("price_fx"),
+                "Buy currency": layer.get("currency"),
+                "Buy NBP rate": layer.get("rate"),
+                "Buy NBP date": layer.get("nbp_date"),
+                "Buy NBP table": layer.get("nbp_table"),
+                "Buy commission (PLN)": layer.get("commission_pln"),
+                "Unit cost (PLN)": unit_cost_pln,
+                "Allocated cost (PLN)": allocated_cost_pln,
+            })
             matched_layers.append(
-                f"{matched_quantity:g} from {layer['date']} at {layer['unit_cost_pln']:.4f} PLN/unit"
+                f"{matched_quantity:g} from {layer['date']} at {unit_cost_pln:.4f} PLN/unit"
                 f" (source row {layer.get('source_row') or 'not recorded'})"
             )
             matched_layers_pl.append(
-                f"{matched_quantity:g} z zakupu {layer['date']} po {layer['unit_cost_pln']:.4f} PLN/szt."
+                f"{matched_quantity:g} z zakupu {layer['date']} po {unit_cost_pln:.4f} PLN/szt."
                 f" (wiersz zrodlowy {layer.get('source_row') or 'niezapisany'})"
             )
             layer["quantity"] -= matched_quantity
@@ -256,6 +277,8 @@ class PIT38Calculator:
             "NBP Table": getattr(quote, "table_number", None),
             "NBP Source": _nbp_source_url(currency, quote.effective_date),
             "Source row": source_row,
+            "Source country": country,
+            "Income type": "capital_gains",
             "Action_EN": "SELL (target year)" if tx_year == self.target_tax_year else f"SELL (prior year {tx_year})",
             "Action_PL": "SPRZEDAŻ (rok docelowy)" if tx_year == self.target_tax_year else f"SPRZEDAŻ (rok ubiegły {tx_year})",
             "Ticker": ticker,
@@ -268,6 +291,7 @@ class PIT38Calculator:
             "Revenue (PLN)": sale_revenue,
             "Cost Basis (PLN)": sale_cost,
             "Net (PLN)": net_pln,
+            "FIFO_Matches": fifo_matches,
             "Details_EN": f"Proceeds = {quantity:g} × {price_fx:g} × {rate:g}; FIFO: " + "; ".join(matched_layers),
             "Details_PL": f"Przychod = {quantity:g} × {price_fx:g} × {rate:g}; FIFO: " + "; ".join(matched_layers_pl),
         })
@@ -317,6 +341,8 @@ class PIT38Calculator:
             "NBP Table": getattr(quote, "table_number", None),
             "NBP Source": _nbp_source_url(currency, quote.effective_date),
             "Source row": source_row,
+            "Source country": country,
+            "Income type": income_type,
             "Action_EN": label_en,
             "Action_PL": label_pl,
             "Ticker": ticker or ("INT" if income_type == "interest" else "DIV"),
@@ -373,6 +399,8 @@ class PIT38Calculator:
             "NBP Table": getattr(quote, "table_number", None),
             "NBP Source": _nbp_source_url(currency, quote.effective_date),
             "Source row": source_row,
+            "Source country": country,
+            "Income type": income_type,
             "Action_EN": f"FOREIGN TAX ({income_type})",
             "Action_PL": f"PODATEK ZAGRANICZNY ({income_type})",
             "Ticker": "TAX",
@@ -385,6 +413,7 @@ class PIT38Calculator:
             "Revenue (PLN)": 0.0,
             "Cost Basis (PLN)": 0.0,
             "Net (PLN)": 0.0,
+            "Foreign tax (PLN)": tax_pln,
             "Details_EN": f"Foreign tax = {tax_paid_fx:g} {currency} × NBP {rate:g} = {tax_pln:.2f} PLN",
             "Details_PL": f"Podatek zagraniczny = {tax_paid_fx:g} {currency} × NBP {rate:g} = {tax_pln:.2f} PLN",
         })

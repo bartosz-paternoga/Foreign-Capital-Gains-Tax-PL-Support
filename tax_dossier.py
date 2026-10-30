@@ -18,6 +18,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (
     BaseDocTemplate,
     Frame,
+    KeepTogether,
     LongTable,
     NextPageTemplate,
     PageBreak,
@@ -28,6 +29,8 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
+
+from tax_calculator import PASSIVE_INCOME_RATE
 
 
 MF_PIT38_URL = "https://www.podatki.gov.pl/podatki-osobiste/pit/formularze-pit/"
@@ -191,6 +194,350 @@ def transaction_ledger_table(calc_data, lang_code="PL"):
         ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
     ]))
     return table
+
+
+def _target_year_steps(calc_data):
+    target_year = str(calc_data.get("Target_Tax_Year", ""))
+    return [
+        step for step in calc_data.get("Calculation_Steps", [])
+        if str(step.get("Year", "")) == target_year
+    ]
+
+
+def _bridge_table(headers, rows, widths_mm, font_size=6.3):
+    header_style = ParagraphStyle(
+        f"BridgeHeader{len(rows)}{len(headers)}",
+        fontName=PDF_BOLD,
+        fontSize=font_size,
+        leading=font_size + 1.5,
+        textColor=colors.white,
+    )
+    cell_style = ParagraphStyle(
+        f"BridgeCell{len(rows)}{len(headers)}",
+        fontName=PDF_FONT,
+        fontSize=font_size,
+        leading=font_size + 1.5,
+        textColor=colors.HexColor("#17212f"),
+    )
+
+    def paragraph(value, style):
+        escaped = _pdf_safe(value).replace("\n", "<br/>")
+        return Paragraph(escaped, style)
+
+    cooked = [[paragraph(value, header_style) for value in headers]]
+    cooked.extend([
+        [paragraph(value, cell_style) for value in row]
+        for row in rows
+    ])
+    table = LongTable(
+        cooked,
+        colWidths=[width * mm for width in widths_mm],
+        repeatRows=1,
+        hAlign="LEFT",
+    )
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#52647c")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f2f5f8")]),
+        ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#d5dde7")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 3),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    return table
+
+
+def _sale_bridge_table(calc_data):
+    steps = _target_year_steps(calc_data)
+    sales = [
+        step for step in steps
+        if str(step.get("Action_EN", "")).startswith("SELL")
+        or str(step.get("Action_PL", "")).startswith("SPRZEDA")
+    ]
+    rows = []
+    for sale in sales:
+        source_row = sale.get("Source row") or "brak numeru"
+        currency = sale.get("Curr") or ""
+        quantity = float(sale.get("Qty") or 0)
+        price_fx = sale.get("Price (FX)", "—")
+        rate = sale.get("NBP Rate", "—")
+        revenue = _money(sale.get("Revenue (PLN)"))
+        nbp_reference = (
+            f"NBP: {sale.get('NBP Rate', '—')}; data: {sale.get('NBP Date') or '—'}; "
+            f"tabela: {sale.get('NBP Table') or '—'}"
+        )
+        proceeds = (
+            f"{quantity:g} × {price_fx} {currency} × {rate} = {revenue} PLN\n"
+            f"{nbp_reference}\n"
+            f"Prowizja sprzedazy: {sale.get('Comm (FX)', '0')} {currency} × {rate} "
+            f"= {_money(sale.get('Comm (PLN)'))} PLN"
+        )
+
+        fifo_matches = sale.get("FIFO_Matches", [])
+        fifo_allocated = sum(
+            float(match.get("Allocated cost (PLN)") or 0)
+            for match in fifo_matches
+        )
+        fifo_cost = (
+            f"Suma alokacji z tabeli ponizej: {_money(fifo_allocated)} PLN\n"
+            "Wiersz sprzedazy laczy sie z kazdym zakupem w tabeli alokacji FIFO."
+            if fifo_matches
+            else sale.get("Details_PL") or "Szczegoly FIFO nie zostaly zapisane."
+        )
+        cost = _money(sale.get("Cost Basis (PLN)"))
+        net = _money(sale.get("Net (PLN)"))
+        rows.append([
+            f"{sale.get('Date', '—')} · {sale.get('Ticker', '—')} · {quantity:g} szt.\n"
+            f"Wiersz sprzedazy IBKR: {source_row}\n"
+            f"Kraj z ustawien: {sale.get('Source country') or 'nieprzypisany'}",
+            proceeds,
+            fifo_cost,
+            f"Koszt FIFO + prowizja sprzedazy: {cost} PLN\n"
+            f"Wynik: {revenue} - {cost} = {net} PLN",
+        ])
+
+    if not rows:
+        rows.append(["Brak sprzedazy w wybranym roku podatkowym.", "—", "—", "—"])
+    return _bridge_table(
+        ["Sprzedaz / wiersz zrodlowy", "Przychod i przeliczenie", "Zakupy dopasowane FIFO", "Koszt i wynik"],
+        rows,
+        [39, 70, 112, 56],
+        font_size=7.1,
+    )
+
+
+def _fifo_allocation_bridge_table(calc_data):
+    all_steps = calc_data.get("Calculation_Steps", [])
+    steps = _target_year_steps(calc_data)
+    sales = [step for step in steps if str(step.get("Action_EN", "")).startswith("SELL")]
+    buy_steps = {
+        str(step.get("Source row")): step
+        for step in all_steps
+        if str(step.get("Action_EN", "")).startswith("BUY")
+        and step.get("Source row") not in (None, "")
+    }
+    rows = []
+    for sale in sales:
+        sale_ref = (
+            f"Sprzedaz CSV {sale.get('Source row') or 'brak'} · {sale.get('Date', '—')} · "
+            f"{sale.get('Ticker', '—')} · kraj {sale.get('Source country') or 'nieprzypisany'}"
+        )
+        matches = sale.get("FIFO_Matches", [])
+        if not matches:
+            rows.append([
+                sale_ref,
+                "Zakup zrodlowy FIFO: szczegoly w rejestrze transakcji.",
+                sale.get("Details_PL") or "Uruchom ponownie obliczenie, aby zapisac szczegolowe dopasowanie FIFO.",
+                "—",
+            ])
+            continue
+        for match in matches:
+            buy_row = match.get("Buy source row")
+            buy_step = buy_steps.get(str(buy_row))
+            buy_ref = f"Zakup CSV {buy_row or 'brak'} · {match.get('Buy date') or '—'}"
+            if buy_step:
+                purchase_formula = (
+                    f"{buy_step.get('Qty', '—')} × {buy_step.get('Price (FX)', '—')} "
+                    f"{buy_step.get('Curr', '')} × NBP {buy_step.get('NBP Rate', '—')} "
+                    f"+ prowizja {_money(buy_step.get('Comm (PLN)'))} PLN "
+                    f"= {_money(buy_step.get('Cost Basis (PLN)'))} PLN kosztu zakupu.\n"
+                    f"Kurs obowiazuje {buy_step.get('NBP Date') or '—'}; "
+                    f"tabela NBP {buy_step.get('NBP Table') or '—'}."
+                )
+            else:
+                purchase_formula = (
+                    "Brak pelnego wiersza zakupu w danych kalkulacji; sprawdz oryginalny CSV."
+                )
+            allocation = (
+                f"{float(match.get('Matched quantity') or 0):g} szt. × "
+                f"{float(match.get('Unit cost (PLN)') or 0):.6f} PLN/szt."
+            )
+            allocated_cost = float(match.get("Allocated cost (PLN)") or 0)
+            rows.append([
+                sale_ref,
+                buy_ref,
+                purchase_formula,
+                f"{allocation} = {allocated_cost:.4f} PLN",
+            ])
+    if not rows:
+        rows.append(["Brak sprzedazy w wybranym roku podatkowym.", "—", "—", "—"])
+    return _bridge_table(
+        ["Powiazana sprzedaz", "Zakup FIFO", "Jak wyliczono koszt zakupu", "Koszt przypisany do sprzedazy"],
+        rows,
+        [52, 42, 113, 70],
+        font_size=7.0,
+    )
+
+
+def _income_bridge_table(calc_data):
+    rows = []
+    for step in _target_year_steps(calc_data):
+        action = str(step.get("Action_EN", ""))
+        is_tax = action.startswith("FOREIGN TAX")
+        if action not in {"INTEREST", "DIVIDEND"} and not is_tax:
+            continue
+        income_type = str(step.get("Income type") or "").lower()
+        if is_tax:
+            label = f"Podatek zagraniczny ({income_type or 'typ nieustalony'})"
+            amount_pln = step.get("Foreign tax (PLN)")
+        else:
+            label = "Odsetki brutto" if action == "INTEREST" else "Dywidenda brutto"
+            amount_pln = step.get("Revenue (PLN)")
+
+        rate_text = (
+            f"NBP {step.get('NBP Rate', '—')}; data {step.get('NBP Date') or '—'}; "
+            f"tabela {step.get('NBP Table') or '—'}"
+        )
+        country = step.get("Source country") or "nieprzypisany"
+        if not is_tax:
+            treatment = (
+                "Kwota brutto wspiera obliczenie poz. 47; nie jest osobnym polem PIT/ZG."
+            )
+        elif not step.get("Source country"):
+            treatment = (
+                "Kraj nieprzypisany: aplikacja nie dolicza tej kwoty do polskiego kredytu."
+            )
+        elif income_type in {"interest", "dividend"}:
+            treatment = "Potracenie wspiera poz. 48; odliczenie podlega limitom."
+        elif income_type == "capital_gains":
+            treatment = "Potracenie od zbycia wspiera poz. 34 i PIT/ZG poz. 30 dla wskazanego kraju."
+        else:
+            treatment = "Potracenie pokazane pomocniczo; sprawdz jego rodzaj i przypisanie kraju."
+        rows.append([
+            f"{step.get('Date', '—')} · {label}",
+            str(step.get("Source row") or "brak"),
+            str(country),
+            f"{step.get('Price (FX)', '—')} {step.get('Curr', '')}",
+            f"{step.get('Details_PL') or 'Brak zapisanego wzoru.'}\n{rate_text}",
+            f"{_money(amount_pln)} PLN\n{treatment}",
+        ])
+    if not rows:
+        rows.append(["Brak odsetek, dywidend lub podatku zagranicznego w wybranym roku.", "—", "—", "—", "—", "—"])
+    return _bridge_table(
+        ["Rodzaj i data", "Wiersz IBKR", "Kraj z ustawien", "Kwota w walucie", "Przeliczenie na PLN", "Kwota / uwaga"],
+        rows,
+        [38, 27, 42, 42, 78, 50],
+        font_size=7.0,
+    )
+
+
+def _summary_bridge_table(calc_data):
+    sec_c = calc_data.get("PIT38_Sekcja_C", {})
+    sec_g = calc_data.get("PIT38_Sekcja_G_Art30a", {})
+    steps = _target_year_steps(calc_data)
+    sales = [step for step in steps if str(step.get("Action_EN", "")).startswith("SELL")]
+    incomes = [step for step in steps if step.get("Action_EN") in {"INTEREST", "DIVIDEND"}]
+    withholdings = [step for step in steps if str(step.get("Action_EN", "")).startswith("FOREIGN TAX")]
+    capital_withholdings = [
+        step for step in withholdings
+        if str(step.get("Income type") or "").lower() == "capital_gains"
+        or "capital_gains" in str(step.get("Action_EN", "")).lower()
+    ]
+    passive_withholdings = [
+        step for step in withholdings
+        if str(step.get("Income type") or "").lower() in {"interest", "dividend"}
+        or any(kind in str(step.get("Action_EN", "")).lower() for kind in ("interest", "dividend"))
+    ]
+    sale_rows = "tabela sprzedazy powyzej; numer CSV widnieje przy kazdej sprzedazy"
+    fifo_rows = "tabela alokacji FIFO powyzej; pokazuje wiersz zakupu i powiazana sprzedaz"
+    capital_tax_rows = "tabela podatku zagranicznego ponizej; zawiera wiersz CSV i kraj z ustawien"
+    passive_rows = "tabela dochodow pasywnych ponizej; kazdy wiersz ma numer CSV"
+    passive_tax_rows = "tabela podatku zagranicznego ponizej; kazdy wiersz ma numer CSV i kraj"
+    rate = float(sec_c.get("Stawka_Poz_32") or 0.19)
+
+    rows = [
+        ["22", f"{_money(sec_c.get('Inne_przychody_Poz_22'))} PLN",
+         "Suma przychodow ze sprzedazy w wybranym roku.",
+         f"Wiersze sprzedazy: {sale_rows}. Szczegoly kazdej sprzedazy sa w tabeli sprzedazy."],
+        ["23", f"{_money(sec_c.get('Koszty_uzyskania_Poz_23'))} PLN",
+         "Suma kosztow FIFO przypisanych do sprzedazy plus prowizje sprzedazy.",
+         f"Wiersze sprzedazy: {sale_rows}; zakupy FIFO: {fifo_rows}."],
+        ["26", f"{_money(sec_c.get('Przychody_Razem_Poz_26'))} PLN",
+         "Laczny przychod z danych IBKR; w tym raporcie rowny poz. 22.",
+         f"Zrodlo: sprzedaze z wierszy {sale_rows}."],
+        ["27", f"{_money(sec_c.get('Koszty_Razem_Poz_27'))} PLN",
+         "Laczne koszty z danych IBKR; w tym raporcie rowne poz. 23.",
+         f"Zrodlo: sprzedaze z wierszy {sale_rows}; zakupy FIFO {fifo_rows}."],
+        ["28 / 29",
+         f"{_money(sec_c.get('Dochod_Poz_28'))} / {_money(sec_c.get('Strata_Poz_29'))} PLN",
+         "Dochod = dodatnia czesc (poz. 22 − poz. 23); strata = ujemna czesc tej roznicy.",
+         "Wynik wyliczony z poz. 22 i 23 powyzej."],
+        ["30", f"{_money(sec_c.get('Strata_z_lat_ubieglych_Poz_30'))} PLN",
+         "Strata z poprzednich lat wpisana w ustawieniach, wykorzystana do obliczenia.",
+         "Nie pochodzi z CSV IBKR. Sprawdz kwote i dokumenty poprzednich zeznan."],
+        ["31", f"{_money(sec_c.get('Podstawa_Poz_31'))} PLN",
+         "Podstawa po odjeciu straty z poz. 30 od dochodu z poz. 28, z zaokragleniem kalkulatora.",
+         "Wynik z poz. 28 i 30."],
+        ["33", f"{_money(sec_c.get('Podatek_Poz_33'))} PLN",
+         f"Podatek od podstawy z poz. 31 przy stawce {rate:.0%}.",
+         "Wynik z poz. 31; sprawdz przepisy dla rozliczanego roku."],
+        ["34", f"{_money(sec_c.get('Podatek_zagraniczny_Poz_34'))} PLN",
+         "Podatek zagraniczny od zbycia przypisany przez ustawienia do kraju.",
+         f"Wiersze potracen podatku od zbycia: {capital_tax_rows}. Nieprzypisane pozycje pokazano osobno."],
+        ["35", f"{_money(sec_c.get('Podatek_nalezny_Poz_35'))} PLN",
+         "Kwota po odjeciu podatku zagranicznego od podatku z poz. 33, wedlug kalkulatora.",
+         "Wynik z poz. 33 i 34; to tylko dane IBKR."],
+        ["47", f"{_money(sec_g.get('Podatek_Art30a_Poz_47'))} PLN",
+         f"{PASSIVE_INCOME_RATE:.0%} od sumy odsetek i dywidend w PLN; kalkulator zaokragla wynik w gore do grosza.",
+         f"Wiersze dochodu pasywnego: {passive_rows}."],
+        ["48", f"{_money(sec_g.get('Podatek_zagraniczny_uznany_Poz_48'))} PLN",
+         "Dozwolony kredyt z zagranicznego podatku, ograniczony limitem podatku polskiego.",
+         f"Wiersze potracen: {passive_tax_rows}; limity dla krajow sa pokazane w osobnej tabeli."],
+        ["49", f"{_money(sec_g.get('Roznica_Poz_49'))} PLN",
+         "Poz. 47 po odjeciu kwoty uznanej w poz. 48, wedlug kalkulatora.",
+         "Wynik z poz. 47 i 48; to tylko dane IBKR."],
+    ]
+    headers = ["Pozycja", "Kwota", "Jak powstala", "Wiersze / skad wziac dane"]
+    widths = [27, 38, 112, 100]
+    capital_table = _bridge_table(headers, rows[:10], widths, font_size=7.0)
+    passive_table = _bridge_table(headers, rows[10:], widths, font_size=7.0)
+    return capital_table, passive_table
+
+
+def _pit_zg_source_bridge_table(calc_data):
+    steps = _target_year_steps(calc_data)
+    sales = [step for step in steps if str(step.get("Action_EN", "")).startswith("SELL")]
+    capital_withholdings = [
+        step for step in steps
+        if str(step.get("Action_EN", "")).startswith("FOREIGN TAX")
+        and (
+            str(step.get("Income type") or "").lower() == "capital_gains"
+            or "capital_gains" in str(step.get("Action_EN", "")).lower()
+        )
+    ]
+    rows = []
+    for item in calc_data.get("PIT_ZG_Position_Summary", []):
+        country = str(item.get("Kraj", "")).upper()
+        rows.append([
+            country,
+            f"Poz. 29: {_money(item.get('Poz_29_Dochod_Art30b_5a_5b_PLN'))} PLN\n"
+            f"Sprzedaze oznaczone kodem {country}: tabela sprzedazy powyzej; "
+            "numer CSV widnieje przy kazdej sprzedazy.\n"
+            "Zakupy przypisane FIFO: tabela alokacji powyzej.",
+            f"Poz. 30: {_money(item.get('Poz_30_Podatek_zagraniczny_od_Poz_29_PLN'))} PLN\n"
+            f"Potracenia oznaczone kodem {country}: tabela podatku zagranicznego powyzej; "
+            "numer CSV widnieje przy kazdym potrąceniu.",
+        ])
+
+    unresolved_sales = [step for step in sales if not step.get("Source country")]
+    unresolved_taxes = [step for step in capital_withholdings if not step.get("Source country")]
+    if unresolved_sales or unresolved_taxes:
+        rows.append([
+            "NIEPRZYPISANE",
+            "Nie dodano do kraju w poz. 29. Sprzedaze bez kodu sa oznaczone jako "
+            "nieprzypisane w tabeli sprzedazy powyzej.",
+            "Nie uwzgledniono w poz. 30. Potracenia bez kodu sa oznaczone jako "
+            "nieprzypisane w tabeli podatku zagranicznego powyzej.",
+        ])
+    if not rows:
+        rows.append(["Brak kraju z przypisanymi kwotami.", "—", "—"])
+    return _bridge_table(
+        ["Kod kraju z ustawien", "PIT/ZG poz. 29 — dochod i jego zrodla", "PIT/ZG poz. 30 — podatek i jego zrodla"],
+        rows,
+        [35, 121, 121],
+        font_size=7.0,
+    )
 
 
 def _polish_excluded_reason(item):
@@ -404,6 +751,10 @@ def generate_dossier_pdf(calc_data, metadata=None):
         "DossierLedgerHeading", parent=heading, fontName=PDF_BOLD, fontSize=14,
         leading=17, textColor=colors.HexColor("#17212f"), spaceBefore=10, spaceAfter=7,
     )
+    bridge_subheading = ParagraphStyle(
+        "DossierBridgeSubheading", parent=heading, fontName=PDF_BOLD, fontSize=9,
+        leading=11, spaceBefore=5, spaceAfter=3,
+    )
     body = ParagraphStyle("DossierBody", parent=styles["BodyText"], fontName=PDF_FONT, fontSize=8.5, leading=12, spaceAfter=5)
     small = ParagraphStyle("DossierSmall", parent=styles["BodyText"], fontName=PDF_FONT, fontSize=7, leading=9)
 
@@ -524,6 +875,40 @@ def generate_dossier_pdf(calc_data, metadata=None):
         "nie zawsze jest krajem zrodla dochodu.", small
     ))
 
+    story.extend([NextPageTemplate("landscape"), PageBreak()])
+    story.append(Paragraph("Sciezka obliczen: od wiersza IBKR do kwoty w raporcie", heading))
+    story.append(Paragraph(
+        "Ta czesc pokazuje, z ktorych wierszy IBKR powstala kazda kwota. Przy sprzedazy zobaczysz "
+        "wiersz sprzedazy, kurs NBP, wykorzystane zakupy FIFO i wynik. Przy odsetkach, dywidendach "
+        "i potraceniach zobaczysz osobny wiersz zrodla, kwote w walucie i przeliczenie na PLN. "
+        "Pelny rejestr oraz linki do tabel NBP znajduja sie w dalszej czesci PDF.", body
+    ))
+    story.append(Paragraph("Sprzedaz: przychod, koszt FIFO i wynik", bridge_subheading))
+    story.append(_sale_bridge_table(calc_data))
+    story.append(Spacer(1, 5))
+    story.append(Paragraph("Kazdy zakup FIFO przypisany do sprzedazy", bridge_subheading))
+    story.append(_fifo_allocation_bridge_table(calc_data))
+    story.append(Spacer(1, 5))
+    story.append(Paragraph("Kwoty PIT-38: wzor i wiersze zrodlowe", bridge_subheading))
+    capital_summary, passive_summary = _summary_bridge_table(calc_data)
+    story.append(capital_summary)
+    story.append(Spacer(1, 5))
+    story.append(KeepTogether([
+        Paragraph("Odsetki i dywidendy: pozycje 47-49", bridge_subheading),
+        passive_summary,
+    ]))
+    story.append(Spacer(1, 5))
+    story.append(Paragraph("Wiersze odsetek, dywidend i podatku zagranicznego", bridge_subheading))
+    story.append(_income_bridge_table(calc_data))
+    story.append(Spacer(1, 5))
+    story.append(Paragraph("PIT/ZG: przypisanie kwot do kraju i wierszy IBKR", bridge_subheading))
+    story.append(Paragraph(
+        "Kod kraju pochodzi z ustawien aplikacji. Tabela pokazuje, ktore sprzedaze i potracenia "
+        "dostaly to przypisanie; sama zgodnosc kodu nie potwierdza prawidlowosci kraju zrodla.", small
+    ))
+    story.append(_pit_zg_source_bridge_table(calc_data))
+
+    story.extend([NextPageTemplate("portrait"), PageBreak()])
     story.append(Paragraph("3. Jak kalkulator dochodzi do kwot", heading))
     methodology = [
         "Transakcje kupna i sprzedazy sa porzadkowane chronologicznie. Przy sprzedazy koszt nabycia jest przypisywany metoda FIFO: najpierw rozliczane sa najstarsze dostepne zakupy tego samego tickeru.",
@@ -680,12 +1065,23 @@ def generate_dossier_pdf(calc_data, metadata=None):
 def _polish_ledger_csv(calc_data):
     rows = []
     for step in calc_data.get("Calculation_Steps", []):
+        fifo_allocations = " | ".join(
+            f"zakup CSV {match.get('Buy source row') or 'brak'} z {match.get('Buy date') or '—'}: "
+            f"{float(match.get('Matched quantity') or 0):g} szt. × "
+            f"{float(match.get('Unit cost (PLN)') or 0):.4f} PLN/szt. "
+            f"= {float(match.get('Allocated cost (PLN)') or 0):.4f} PLN; "
+            f"kurs NBP {match.get('Buy NBP rate') or '—'} ({match.get('Buy NBP date') or '—'}, "
+            f"tabela {match.get('Buy NBP table') or '—'})"
+            for match in step.get("FIFO_Matches", [])
+        )
         rows.append({
             "Rodzaj rekordu": "Transakcja podatkowa",
             "Rok": step.get("Year"),
             "Data": step.get("Date"),
             "Wiersz zrodlowego CSV IBKR": step.get("Source row"),
             "Operacja": step.get("Action_PL"),
+            "Kraj zrodla z ustawien": step.get("Source country"),
+            "Rodzaj dochodu": step.get("Income type"),
             "Ticker": step.get("Ticker"),
             "Waluta": step.get("Curr"),
             "Ilosc": step.get("Qty"),
@@ -699,6 +1095,8 @@ def _polish_ledger_csv(calc_data):
             "Przychod PLN": step.get("Revenue (PLN)"),
             "Koszt PLN": step.get("Cost Basis (PLN)"),
             "Wynik PLN": step.get("Net (PLN)"),
+            "Podatek zagraniczny PLN": step.get("Foreign tax (PLN)"),
+            "Alokacje kosztu FIFO": fifo_allocations,
             "Wzor i szczegoly FIFO": step.get("Details_PL"),
         })
 
