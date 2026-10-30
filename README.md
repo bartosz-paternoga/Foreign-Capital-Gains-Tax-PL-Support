@@ -1,5 +1,11 @@
 # Foreign Capital Gains PL Tax Support
 
+> **PROPRIETARY SOFTWARE — NO LICENSE GRANTED**
+>
+> Copyright © 2026 Bartosz Paternoga. All rights reserved. No separate software license is granted to run, use, modify, distribute, sublicense, or create derivative works from the original software. Rights to view or fork this public repository are governed by GitHub’s Terms; any broader permission must be granted in writing by the copyright holder.
+>
+> **NO WARRANTY; LIMITATION OF LIABILITY.** The software and its reports are provided “AS IS,” without warranties of any kind, to the fullest extent permitted by applicable law. This is not tax or legal advice; independently verify every result before relying on it. To the fullest extent permitted by applicable law, the author disclaims liability for loss, damages, tax assessments, penalties, or claims arising from access to, use of, inability to use, or reliance on the software. Nothing in this notice excludes liability that cannot lawfully be excluded. Third-party components remain subject to their own licenses.
+
 A Streamlit workspace for Polish foreign-capital-gains tax calculations and PIT-38 / PIT-ZG audit reports.
 
 The intended scope is an IBKR Ireland calculation pack. It reports the IBKR contribution for manual consolidation with other broker documents; it is not a multi-broker return preparer.
@@ -60,7 +66,3 @@ Run the offline parser, FIFO, multi-currency/year, reconciliation, export, round
     python -m unittest discover -s tests -v
 
 The tests mock NBP responses and do not need network access.
-
-## Copyright
-
-Copyright © 2026 Bartosz Paternoga. All rights reserved. No general license is granted to use, modify, or distribute this software.
