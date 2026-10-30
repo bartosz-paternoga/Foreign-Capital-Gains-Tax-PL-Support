@@ -50,7 +50,7 @@ except ImportError:
 # Page Configuration - Sidebar expanded by default
 st.set_page_config(
     page_title="Foreign Capital Gains PL Tax Support",
-    page_icon="⚖️",
+    page_icon=Path(__file__).with_name("favicon.svg"),
     layout="wide",
     initial_sidebar_state="expanded"
 )
