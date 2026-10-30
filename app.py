@@ -558,6 +558,27 @@ def import_issue_text(issue, translation, lang_code):
     return issue.get("Issue", "")
 
 
+AI_CHAT_AVATARS = {
+    "user": (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">'
+        '<rect width="40" height="40" rx="11" fill="#edf1f5"/><rect x="0.5" y="0.5" width="39" height="39" rx="10.5" fill="none" stroke="#d8e0e8"/>'
+        '<circle cx="20" cy="15" r="5" fill="none" stroke="#475569" stroke-width="1.8"/>'
+        '<path d="M10.5 30c1.4-5 4.6-7.5 9.5-7.5s8.1 2.5 9.5 7.5" fill="none" '
+        'stroke="#475569" stroke-width="1.8" stroke-linecap="round"/>'
+        '</svg>'
+    ),
+    "assistant": (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">'
+        '<rect width="40" height="40" rx="11" fill="#edf1f5"/><rect x="0.5" y="0.5" width="39" height="39" rx="10.5" fill="none" stroke="#d8e0e8"/>'
+        '<path d="M20 8v4m-4 0h8" fill="none" stroke="#475569" stroke-width="1.8" stroke-linecap="round"/>'
+        '<rect x="10" y="13" width="20" height="16" rx="5" fill="none" stroke="#475569" stroke-width="1.8"/>'
+        '<circle cx="16" cy="20" r="1.6" fill="#475569"/><circle cx="24" cy="20" r="1.6" fill="#475569"/>'
+        '<path d="M16 25h8M8 18v6m24-6v6" fill="none" stroke="#475569" stroke-width="1.8" stroke-linecap="round"/>'
+        '</svg>'
+    ),
+}
+
+
 def render_ai_chat(kind, context, translation):
     """Render a consent-gated, session-only chat grounded in a whitelisted summary."""
     api_key = _OPENROUTER_CONFIG.get("api_key", "")
@@ -583,7 +604,9 @@ def render_ai_chat(kind, context, translation):
 
     history = st.session_state.get(history_key, [])
     for message in history:
-        with st.chat_message(message["role"]):
+        role = message["role"]
+        avatar = AI_CHAT_AVATARS.get(role, AI_CHAT_AVATARS["assistant"])
+        with st.chat_message(role, avatar=avatar):
             st.markdown(message["content"])
 
     if history and st.button(translation["ai_clear_chat"], key=f"{prefix}_clear"):
