@@ -36,24 +36,46 @@ def generate_csv(calc_data):
     })
 
     for item in calc_data.get("PIT_ZG_Position_Summary", []):
-        country = item["Kraj"]
-        rows.append({
-            "Category": f"IBKR contribution to PIT/ZG(8) section C.3 — {country}",
-            "Field": "Position 29 — Art. 30b(5a)/(5b) foreign income (PLN)",
-            "Value": item["Poz_29_Dochod_Art30b_5a_5b_PLN"],
-        })
-        rows.append({
-            "Category": f"IBKR contribution to PIT/ZG(8) section C.3 — {country}",
-            "Field": "Position 30 — foreign tax paid on position 29 income, before limit (PLN)",
-            "Value": item["Poz_30_Podatek_zagraniczny_od_Poz_29_PLN"],
-        })
+        country = str(item["Kraj"]).upper()
+        category = f"PIT/ZG(8) — one form per country; IBKR contribution for {country}"
+        rows.extend([
+            {
+                "Category": category,
+                "Field": "Position 6 — full country name (enter the name matching position 7)",
+                "Value": f"ENTER COUNTRY NAME FOR {country}",
+            },
+            {
+                "Category": category,
+                "Field": "Position 7 — two-letter country code (ISO)",
+                "Value": country,
+            },
+            {
+                "Category": category,
+                "Field": "Position 29 — Art. 30b(5a)/(5b) income (PLN); copy to PIT/ZG",
+                "Value": item["Poz_29_Dochod_Art30b_5a_5b_PLN"],
+            },
+            {
+                "Category": category,
+                "Field": "Position 30 — foreign tax paid on position 29 income, before limit (PLN); copy to PIT/ZG",
+                "Value": item["Poz_30_Podatek_zagraniczny_od_Poz_29_PLN"],
+            },
+        ])
 
+    supplementary_labels = {
+        "Przychod_Art30b": "Art. 30b proceeds — support for position 29 calculation; not a separate form field (PLN)",
+        "Koszty_Art30b": "Art. 30b FIFO costs — support for position 29 calculation; not a separate form field (PLN)",
+        "Dochod_Art30b": "Art. 30b net result — support for PIT/ZG position 29 (PLN)",
+        "Strata_Art30b": "Art. 30b loss — supporting detail, not positive income for PIT/ZG position 29 (PLN)",
+        "Odsetki_Art30a": "Art. 30a interest — not PIT/ZG; see PIT-38 Section G positions 47–49 totals (PLN)",
+        "Dywidendy_Art30a": "Art. 30a dividends — not PIT/ZG; see PIT-38 Section G positions 47–49 totals (PLN)",
+        "Podatek_Zagraniczny": "Foreign tax, all categories — supporting detail; do not copy as PIT/ZG position 30 (PLN)",
+    }
     for item in calc_data["PIT_ZG_Attachments"]:
         for key, value in item.items():
             if key != "Kraj":
                 rows.append({
-                    "Category": f"Supplementary country summary — not the official PIT/ZG form ({item['Kraj']})",
-                    "Field": key,
+                    "Category": f"Supporting country detail — not separate PIT/ZG positions ({item['Kraj']})",
+                    "Field": supplementary_labels.get(key, key),
                     "Value": value,
                 })
 

@@ -240,7 +240,7 @@ TRANSLATIONS = {
         "success_msg": "Calculation complete: {count} supported records processed. Verify holdings, instrument treatment, and other PIT-38 fields before filing.",
         "tab_sec_c": "PIT-38 Section C",
         "tab_sec_g": "Section G (Foreign Tax)",
-        "tab_pit_zg": "Country Income (Supplementary)",
+        "tab_pit_zg": "PIT/ZG positions by country",
         "tab_ledger": "Detailed FIFO Audit Ledger",
         "tab_warnings": "Execution Logs & Validation",
         "excluded_activity_title": "Raw IBKR activity excluded from PIT-38",
@@ -265,14 +265,22 @@ TRANSLATIONS = {
         "foreign_tax": "Foreign tax allowed as credit (Poz. 48)",
         "pl_tax": "Art. 30a tax due (Poz. 49)",
         "pit_zg_title": "PIT/ZG figures by country",
-        "pit_zg_scope_note": "The figures below show the app-calculated IBKR contribution to PIT/ZG positions 29–30, by country. This app cannot produce a completed official form: it contains only IBKR activity and does not collect the taxpayer identity fields required by the form. Verify the source country and tax treatment, then combine amounts from your other sources for the same country. The separate Art. 30a interest/dividend breakdown is supplementary and is not part of PIT/ZG positions 29–30.",
+        "pit_zg_scope_note": "Use the form-entry table below: prepare a separate PIT/ZG(8) for each country. These are only the IBKR amounts; confirm the source country and add amounts from your other brokers for that same country.",
+        "pit_zg_form_guide": "**PIT/ZG(8) fields:** Poz. 1 NIP/PESEL; Poz. 2 tax year; Poz. 3–5 taxpayer surname, first name and birth date; Poz. 6 full country name; Poz. 7 two-letter country code. In Section C.3, copy the table's amount to Poz. 29 (income under Art. 30b(5a)/(5b)) and Poz. 30 (foreign tax paid on Poz. 29 income, before the credit limit). Poz. 31–32 are for virtual-currency income and tax; this app does not calculate them.",
         "pit_zg_country": "Country summary",
-        "pit_zg_country_column": "Country",
-        "pit_zg_fields_title": "PIT/ZG (8), Section C.3 — IBKR contribution to positions 29–30",
-        "pit_zg_pos29": "Position 29: Art. 30b (5a/5b) income (PLN)",
-        "pit_zg_pos30": "Position 30: foreign tax paid on position 29 income (PLN)",
-        "pit_zg_positions_note": "Position 30 is shown before the tax-credit limit, as requested by the form. This app does not calculate PIT/ZG positions 31–32 for foreign virtual-currency income. Confirm each country and amount against source documents before entering an official form.",
-        "pit_zg_supplement_title": "Additional IBKR income breakdown by country (supplementary)",
+        "pit_zg_country_name_column": "Poz. 6 — full country name (fill in)",
+        "pit_zg_country_name_prompt": "Enter the full country name for {country}",
+        "pit_zg_country_code_column": "Poz. 7 — country code",
+        "pit_zg_fields_title": "PIT/ZG(8), Section C.3 — copy these IBKR amounts into the form",
+        "pit_zg_pos29": "Poz. 29: Art. 30b(5a)/(5b) income (PLN)",
+        "pit_zg_pos30": "Poz. 30: foreign tax on Poz. 29 income (PLN)",
+        "pit_zg_positions_note": "The country name in Poz. 6 must match the two-letter code in Poz. 7. Poz. 30 is foreign tax paid before the credit limit. Verify the country and treatment from source documents.",
+        "pit_zg_supplement_title": "Supporting country detail — not separate PIT/ZG boxes",
+        "pit_zg_supplement_note": "Art. 30b proceeds and costs below support the income calculation for PIT/ZG Poz. 29; they are not entered separately on PIT/ZG. Art. 30a interest and dividends are not PIT/ZG fields; use the app's separate PIT-38 Section G totals for Poz. 47–49.",
+        "pit_zg_supp_proceeds": "Poz. 29 support: Art. 30b proceeds",
+        "pit_zg_supp_costs": "Poz. 29 support: Art. 30b costs",
+        "pit_zg_supp_interest": "Art. 30a interest (not PIT/ZG)",
+        "pit_zg_supp_dividends": "Art. 30a dividends (not PIT/ZG)",
         "pit_zg_form_link": "Official Ministry of Finance PIT/ZG (8) form",
         "pit_zg_no_positions": "No mapped foreign securities income is available for positions 29–30. Check the ticker-country mapping and unresolved-country notes.",
         "no_zg": "No verified country attribution is available for this year; configure and verify PIT/ZG separately.",
@@ -293,12 +301,13 @@ TRANSLATIONS = {
         "pdf_title": "PIT-38 Calculation Summary — {year}",
         "pdf_sub": "Interactive Brokers export | Prior loss deducted: {loss:.2f} PLN",
         "summary_pdf_disclaimer": "WORKING CALCULATION ONLY — check the source data and tax treatment before filing.",
-        "summary_pdf_scope": "This is an IBKR-only summary. The country table gives candidate figures for PIT/ZG positions 29–30; verify country/tax treatment and add other sources. The complete print-ready report contains transaction calculations, source-row references, reconciliation, and review notes.",
-        "pdf_zg_heading": "PIT/ZG (8), section C.3 — IBKR contribution by country",
-        "pdf_zg_country": "Country",
-        "pdf_zg_pos29": "Position 29 income (PLN)",
-        "pdf_zg_pos30": "Position 30 tax paid abroad (PLN)",
-        "pdf_zg_note": "Candidate IBKR amounts only. Position 30 is before the credit limit. The app does not collect taxpayer identity, confirm source-country treatment, include other brokers, or calculate virtual-currency positions 31–32.",
+        "summary_pdf_scope": "This IBKR-only summary shows PIT/ZG positions 6–7 (country/name) and 29–30 (amounts). Confirm the source country and add other broker amounts for the same country.",
+        "pdf_zg_heading": "PIT/ZG (8), section C.3 — figures to copy by country",
+        "pdf_zg_country": "Position 6 — full country name (enter)",
+        "pdf_zg_country_code": "Position 7 — code",
+        "pdf_zg_pos29": "Position 29 — Art. 30b income (PLN)",
+        "pdf_zg_pos30": "Position 30 — tax on position 29 (PLN)",
+        "pdf_zg_note": "Prepare one PIT/ZG per country. Fill positions 1–5 with taxpayer details/year, position 6 with the full country name, and position 7 with its two-letter code. Copy these figures into positions 29 and 30. Position 30 is before the credit limit. The app is IBKR-only and does not calculate virtual-currency positions 31–32.",
         "pdf_sec_c_header": "PIT-38 Section C",
         "pdf_sec_g_header": "PIT-38 Section G (Foreign Tax Credit & Withholding)",
         "pdf_amount_header": "Amount (PLN)",
@@ -391,7 +400,7 @@ TRANSLATIONS = {
         "success_msg": "Obliczenia zakończone: przetworzono {count} obsługiwanych rekordów. Przed złożeniem sprawdź historię, klasyfikację instrumentów i pozostałe pozycje PIT-38.",
         "tab_sec_c": "PIT-38 Sekcja C",
         "tab_sec_g": "Sekcja G (Podatek Zagraniczny)",
-        "tab_pit_zg": "Dochody wg kraju (pomocnicze)",
+        "tab_pit_zg": "PIT/ZG — pozycje według kraju",
         "tab_ledger": "Szczegółowy rejestr FIFO",
         "tab_warnings": "Dziennik Zdarzeń i Walidacja",
         "excluded_activity_title": "Surowe operacje IBKR wyłączone z PIT-38",
@@ -416,14 +425,22 @@ TRANSLATIONS = {
         "foreign_tax": "Uznany podatek zagraniczny (Poz. 48)",
         "pl_tax": "Podatek Art. 30a do zapłaty (Poz. 49)",
         "pit_zg_title": "Kwoty PIT/ZG według kraju",
-        "pit_zg_scope_note": "Poniższe kwoty pokazują obliczony przez aplikację wkład z IBKR do poz. 29–30 PIT/ZG, według kraju. Aplikacja nie tworzy kompletnego formularza urzędowego: obejmuje tylko aktywność z IBKR i nie zbiera danych identyfikacyjnych podatnika wymaganych w formularzu. Potwierdź kraj źródła i sposób opodatkowania, a następnie zsumuj kwoty z innych źródeł dla tego samego kraju. Oddzielne zestawienie odsetek i dywidend Art. 30a jest pomocnicze i nie należy do poz. 29–30 PIT/ZG.",
+        "pit_zg_scope_note": "Użyj poniższej tabeli do przepisania kwot: dla każdego kraju przygotuj osobny PIT/ZG(8). To są kwoty tylko z IBKR; potwierdź kraj źródła i dodaj kwoty z innych brokerów dla tego samego kraju.",
+        "pit_zg_form_guide": "**Pola PIT/ZG(8):** poz. 1 NIP/PESEL; poz. 2 rok podatkowy; poz. 3–5 nazwisko, imię i data urodzenia podatnika; poz. 6 pełna nazwa państwa; poz. 7 dwuliterowy kod państwa. W sekcji C.3 przepisz kwotę z tabeli do poz. 29 (dochód z art. 30b ust. 5a/5b) i poz. 30 (podatek zapłacony za granicą od dochodu z poz. 29, przed limitem odliczenia). Poz. 31–32 dotyczą dochodu i podatku od walut wirtualnych; aplikacja ich nie oblicza.",
         "pit_zg_country": "Zestawienie dla kraju",
-        "pit_zg_country_column": "Kraj",
-        "pit_zg_fields_title": "PIT/ZG (8), sekcja C.3 — wkład IBKR do poz. 29–30",
+        "pit_zg_country_name_column": "Poz. 6 — pełna nazwa państwa (uzupełnij)",
+        "pit_zg_country_name_prompt": "Wpisz pełną nazwę państwa dla kodu {country}",
+        "pit_zg_country_code_column": "Poz. 7 — kod państwa",
+        "pit_zg_fields_title": "PIT/ZG(8), sekcja C.3 — te kwoty przepisz do formularza",
         "pit_zg_pos29": "Poz. 29: dochód z art. 30b ust. 5a/5b (PLN)",
-        "pit_zg_pos30": "Poz. 30: podatek zapłacony za granicą od dochodu z poz. 29 (PLN)",
-        "pit_zg_positions_note": "Poz. 30 jest podawana przed zastosowaniem limitu odliczenia, zgodnie z formularzem. Aplikacja nie oblicza poz. 31–32 PIT/ZG dotyczących zagranicznych walut wirtualnych. Przed wpisaniem kwot do formularza urzędowego potwierdź kraj i kwoty w dokumentach źródłowych.",
-        "pit_zg_supplement_title": "Dodatkowe zestawienie dochodów z IBKR według kraju (pomocnicze)",
+        "pit_zg_pos30": "Poz. 30: podatek od dochodu z poz. 29 (PLN)",
+        "pit_zg_positions_note": "Nazwa państwa w poz. 6 musi odpowiadać kodowi dwuliterowemu w poz. 7. Poz. 30 obejmuje podatek zagraniczny przed limitem odliczenia. Potwierdź kraj i kwalifikację w dokumentach źródłowych.",
+        "pit_zg_supplement_title": "Szczegóły pomocnicze — nie są odrębnymi polami PIT/ZG",
+        "pit_zg_supplement_note": "Przychody i koszty Art. 30b poniżej składają się na obliczenie dochodu do PIT/ZG poz. 29; nie wpisuje się ich osobno do PIT/ZG. Odsetki i dywidendy Art. 30a nie są polami PIT/ZG — użyj oddzielnych łącznych kwot PIT-38, sekcja G, poz. 47–49.",
+        "pit_zg_supp_proceeds": "Podstawa poz. 29: przychód Art. 30b",
+        "pit_zg_supp_costs": "Podstawa poz. 29: koszt Art. 30b",
+        "pit_zg_supp_interest": "Odsetki Art. 30a (nie PIT/ZG)",
+        "pit_zg_supp_dividends": "Dywidendy Art. 30a (nie PIT/ZG)",
         "pit_zg_form_link": "Urzędowy formularz PIT/ZG (8) Ministerstwa Finansów",
         "pit_zg_no_positions": "Brak przypisanych do kraju dochodów z zagranicznych papierów dla poz. 29–30. Sprawdź mapowanie tickerów i uwagi o nierozstrzygniętym kraju.",
         "no_zg": "Brak potwierdzonej atrybucji kraju; skonfiguruj i zweryfikuj PIT/ZG osobno.",
@@ -444,12 +461,13 @@ TRANSLATIONS = {
         "pdf_title": "PIT-38 — podsumowanie obliczeń ({year})",
         "pdf_sub": "Dane z Interactive Brokers | Odliczona strata z lat ubiegłych: {loss:.2f} PLN",
         "summary_pdf_disclaimer": "ZESTAWIENIE POMOCNICZE — przed złożeniem sprawdź dane źródłowe i sposób rozliczenia podatkowego.",
-        "summary_pdf_scope": "To podsumowanie obejmuje tylko IBKR. Poniższa tabela według kraju pokazuje kandydackie kwoty do poz. 29–30 PIT/ZG; potwierdź kraj i sposób opodatkowania oraz dodaj inne źródła. Kompletny raport do wydruku zawiera obliczenia transakcji, numery wierszy źródłowych, uzgodnienie rachunku i uwagi.",
-        "pdf_zg_heading": "PIT/ZG (8), sekcja C.3 — wkład IBKR według kraju",
-        "pdf_zg_country": "Kraj",
-        "pdf_zg_pos29": "Dochód, poz. 29 (PLN)",
-        "pdf_zg_pos30": "Podatek zapłacony, poz. 30 (PLN)",
-        "pdf_zg_note": "Kandydackie kwoty tylko z IBKR. Poz. 30 jest przed limitem odliczenia. Aplikacja nie zbiera danych identyfikacyjnych, nie potwierdza kraju źródła i sposobu opodatkowania, nie uwzględnia innych brokerów ani nie oblicza poz. 31–32 dotyczących walut wirtualnych.",
+        "summary_pdf_scope": "Podsumowanie obejmuje tylko IBKR. Tabela PIT/ZG wskazuje osobno poz. 6–7 (państwo/kod) oraz kwoty do poz. 29–30. Potwierdź kraj źródła i dodaj kwoty z innych brokerów dla tego samego kraju.",
+        "pdf_zg_heading": "PIT/ZG(8), sekcja C.3 — kwoty do przepisania według kraju",
+        "pdf_zg_country": "Poz. 6 — pełna nazwa państwa (wpisz)",
+        "pdf_zg_country_code": "Poz. 7 — kod",
+        "pdf_zg_pos29": "Poz. 29 — dochód Art. 30b 5a/5b (PLN)",
+        "pdf_zg_pos30": "Poz. 30 — podatek od poz. 29 (PLN)",
+        "pdf_zg_note": "Osobny PIT/ZG dla każdego państwa. Poz. 1–5: dane podatnika i rok; poz. 6: pełna nazwa państwa; poz. 7: kod dwuliterowy. Wpisz kwoty z tabeli w poz. 29 i 30. Poz. 30 jest przed limitem odliczenia. Aplikacja obejmuje tylko IBKR i nie oblicza poz. 31–32 dotyczących walut wirtualnych.",
         "pdf_sec_c_header": "Sekcja C PIT-38",
         "pdf_sec_g_header": "Sekcja G PIT-38 (odliczenie podatku zagranicznego)",
         "pdf_amount_header": "Kwota (PLN)",
@@ -842,18 +860,21 @@ def generate_pdf(calc_data, tax_year, loss_cf, lang_code="EN"):
     story.append(Paragraph(clean_pdf_text(t["pdf_zg_note"]), styles["Normal"]))
     pit_zg_rows = [[
         clean_pdf_text(t["pdf_zg_country"]),
+        clean_pdf_text(t["pdf_zg_country_code"]),
         clean_pdf_text(t["pdf_zg_pos29"]),
         clean_pdf_text(t["pdf_zg_pos30"]),
     ]]
     for item in calc_data.get("PIT_ZG_Position_Summary", []):
+        country_code = str(item.get("Kraj", "")).upper()
         pit_zg_rows.append([
-            clean_pdf_text(item.get("Kraj")),
+            clean_pdf_text(t["pit_zg_country_name_prompt"].format(country=country_code)),
+            clean_pdf_text(country_code),
             f"{float(item.get('Poz_29_Dochod_Art30b_5a_5b_PLN', 0.0)):.2f}",
             f"{float(item.get('Poz_30_Podatek_zagraniczny_od_Poz_29_PLN', 0.0)):.2f}",
         ])
     if len(pit_zg_rows) == 1:
-        pit_zg_rows.append([clean_pdf_text(t["pit_zg_no_positions"]), "—", "—"])
-    t3 = Table(pit_zg_rows, colWidths=[180, 300, 300])
+        pit_zg_rows.append([clean_pdf_text(t["pit_zg_no_positions"]), "—", "—", "—"])
+    t3 = Table(pit_zg_rows, colWidths=[175, 75, 265, 265])
     t3.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#64748b')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
@@ -1327,10 +1348,12 @@ if st.session_state.calculated_data is not None:
             st.markdown(f"#### {t['pit_zg_title']}")
             st.info(t["pit_zg_scope_note"])
             st.markdown(f"##### {t['pit_zg_fields_title']}")
+            st.markdown(t["pit_zg_form_guide"])
             pit_zg_positions = calc.get("PIT_ZG_Position_Summary", [])
             if pit_zg_positions:
                 position_rows = [{
-                    t["pit_zg_country_column"]: item["Kraj"],
+                    t["pit_zg_country_name_column"]: t["pit_zg_country_name_prompt"].format(country=item["Kraj"]),
+                    t["pit_zg_country_code_column"]: item["Kraj"],
                     t["pit_zg_pos29"]: item["Poz_29_Dochod_Art30b_5a_5b_PLN"],
                     t["pit_zg_pos30"]: item["Poz_30_Podatek_zagraniczny_od_Poz_29_PLN"],
                 } for item in pit_zg_positions]
@@ -1338,17 +1361,18 @@ if st.session_state.calculated_data is not None:
             else:
                 st.info(t["pit_zg_no_positions"])
             st.caption(t["pit_zg_positions_note"])
-            st.markdown(f"[ {t['pit_zg_form_link']} ](https://podatki.gov.pl/media/jlvjafcd/pit_zg_-8-07-1.pdf)")
+            st.markdown(f"[ {t['pit_zg_form_link']} ](https://www.gov.pl/web/finanse/pitzg)")
             st.markdown(f"##### {t['pit_zg_supplement_title']}")
+            st.caption(t["pit_zg_supplement_note"])
             pit_zg = calc["PIT_ZG_Attachments"]
             if pit_zg:
                 for item in pit_zg:
                     st.markdown(f"**{t['pit_zg_country']}:** `{item['Kraj']}`")
                     c1, c2, c3, c4 = st.columns(4)
-                    c1.metric("Art. 30b proceeds", f"{item['Przychod_Art30b']:,.2f} PLN")
-                    c2.metric("Art. 30b costs", f"{item['Koszty_Art30b']:,.2f} PLN")
-                    c3.metric("Art. 30a interest", f"{item['Odsetki_Art30a']:,.2f} PLN")
-                    c4.metric("Art. 30a dividends", f"{item['Dywidendy_Art30a']:,.2f} PLN")
+                    c1.metric(t["pit_zg_supp_proceeds"], f"{item['Przychod_Art30b']:,.2f} PLN")
+                    c2.metric(t["pit_zg_supp_costs"], f"{item['Koszty_Art30b']:,.2f} PLN")
+                    c3.metric(t["pit_zg_supp_interest"], f"{item['Odsetki_Art30a']:,.2f} PLN")
+                    c4.metric(t["pit_zg_supp_dividends"], f"{item['Dywidendy_Art30a']:,.2f} PLN")
             else:
                 st.info(t["no_zg"])
             for unresolved in calc.get("PIT_ZG_Unresolved", []):

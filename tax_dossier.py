@@ -31,7 +31,7 @@ from reportlab.platypus import (
 
 
 MF_PIT38_URL = "https://www.podatki.gov.pl/podatki-osobiste/pit/formularze-pit/"
-MF_PITZG_FORM_URL = "https://podatki.gov.pl/media/jlvjafcd/pit_zg_-8-07-1.pdf"
+MF_PITZG_FORM_URL = "https://www.gov.pl/web/finanse/pitzg"
 NBP_API_URL = "https://api.nbp.pl/"
 RECONCILIATION_STATUS_PL = {
     "MATCH": "ZGODNE",
@@ -464,44 +464,51 @@ def generate_dossier_pdf(calc_data, metadata=None):
     ]
     story.extend([Spacer(1, 7), _table(passive_rows, [36 * mm, 37 * mm, 101 * mm], 6.8)])
 
-    story.append(Paragraph("2. Wklad danych IBKR do PIT/ZG (8), sekcja C.3 — poz. 29–30", heading))
+    story.append(Paragraph("2. PIT/ZG (8) — przewodnik po pozycjach formularza", heading))
     story.append(Paragraph(
-        "To kwoty obliczone przez aplikacje dla danych IBKR i kraju wskazanego w mapowaniu. Poz. 29 pokazuje "
-        "dodatni wynik ze sprzedazy papierow (przychody minus koszty FIFO) przypisany do kraju; poz. 30 "
-        "pokazuje podatek zagraniczny oznaczony w danych jako dotyczacy zyskow kapitalowych, przed limitem odliczenia. "
-        "To nie jest uzupelniony formularz urzedowy: aplikacja obejmuje tylko IBKR i nie zbiera danych identyfikacyjnych "
-        "podatnika. Potwierdz kraj zrodla i kwalifikacje podatkowa oraz dodaj dane innych brokerow dla tego samego kraju. "
-        "Poz. 31–32 dotyczace walut wirtualnych nie sa obliczane przez ten kalkulator.", small,
+        "Sklada sie oddzielny zalacznik PIT/ZG dla kazdego panstwa uzyskania dochodu/przychodu. "
+        "W formularzu uzupelnij poz. 1 (NIP/PESEL), poz. 2 (rok), poz. 3–5 (nazwisko, imie, data urodzenia), "
+        "poz. 6 (pelna nazwa panstwa) i poz. 7 (dwuliterowy kod kraju). W tabeli ponizej kod IBKR trafia do poz. 7; "
+        "w poz. 6 recznie wpisz pelna nazwe panstwa odpowiadajaca temu kodowi. Kwota w kolumnie poz. 29 jest "
+        "do przepisania do PIT/ZG C.3 poz. 29 (dochod z art. 30b ust. 5a i 5b). Kwota w kolumnie poz. 30 jest "
+        "do przepisania do poz. 30 (podatek zaplacony za granica od dochodu z poz. 29), przed limitem odliczenia. "
+        "To wklad z IBKR, nie gotowy formularz: potwierdz kraj i kwalifikacje podatkowa, dodaj inne zrodla dla kraju. "
+        "PIT/ZG poz. 31–32 dotycza art. 30b ust. 5e i 5f (waluty wirtualne) i nie sa obliczane przez aplikacje.", small,
     ))
     story.append(Paragraph(
         f'<link href="{MF_PITZG_FORM_URL}" color="#475569">Aktualny formularz PIT/ZG (8) Ministerstwa Finansow</link>',
         small,
     ))
     position_rows = [[
-        "Kraj", "Poz. 29 — dochod Art. 30b ust. 5a/5b (PLN)",
+        "PIT/ZG poz. 6 — nazwa panstwa (wpisz)", "Poz. 7 — kod kraju",
+        "Poz. 29 — dochod Art. 30b ust. 5a/5b (PLN)",
         "Poz. 30 — podatek od dochodu z poz. 29 (PLN)",
     ]]
     for item in calc_data.get("PIT_ZG_Position_Summary", []):
+        country_code = str(item.get("Kraj", "")).upper()
         position_rows.append([
-            item.get("Kraj"),
+            f"Wpisz pelna nazwe dla kodu {country_code}", country_code,
             _money(item.get("Poz_29_Dochod_Art30b_5a_5b_PLN")),
             _money(item.get("Poz_30_Podatek_zagraniczny_od_Poz_29_PLN")),
         ])
     if len(position_rows) == 1:
-        position_rows.append(["Brak przypisanych kwot do poz. 29–30.", "—", "—"])
-    story.append(_table(position_rows, [28 * mm, 92 * mm, 92 * mm], 6.5))
+        position_rows.append(["Brak przypisanych kwot.", "—", "—", "—"])
+    story.append(_table(position_rows, [47 * mm, 20 * mm, 60 * mm, 60 * mm], 5.8))
     story.append(Spacer(1, 7))
 
     story.append(Paragraph(
-        "Dodatkowe zestawienie dochodow wedlug kraju (pomocnicze; nie sa to pola PIT/ZG)", heading,
+        "Szczegoly wspierajace obliczenia — nie wpisuj ich jako odrebnych pol PIT/ZG", heading,
     ))
     story.append(Paragraph(
-        "Ponizsza tabela pokazuje szerszy podzial danych IBKR, w tym odsetki i dywidendy Art. 30a. "
-        "Nie nalezy traktowac jej jako pol formularza PIT/ZG.", small,
+        "Przychod i koszt Art. 30b sa skladnikami obliczenia kwoty PIT/ZG poz. 29; do formularza przepisz "
+        "wynik netto z tabeli PIT/ZG powyzej, a nie te skladniki osobno. Odsetki i dywidendy Art. 30a nie sa "
+        "polami PIT/ZG; aplikacja pokazuje je jako szczegoly pomocnicze dla lacznych kwot PIT-38, sekcja G, poz. 47–49. "
+        "Podatek zagraniczny ze wszystkich kategorii w tej tabeli nie jest kwota do wpisania w PIT/ZG poz. 30.", small,
     ))
     zg_rows = [[
-        "Kraj", "Przychod Art. 30b", "Koszt Art. 30b", "Odsetki", "Dywidendy",
-        "Podatek zagraniczny — wszystkie kategorie (pomocniczy)",
+        "Kod kraju", "Art. 30b przychod (podstawa poz. 29)", "Art. 30b koszt (podstawa poz. 29)",
+        "Odsetki Art. 30a — nie PIT/ZG", "Dywidendy Art. 30a — nie PIT/ZG",
+        "Podatek zagraniczny — wszystkie kategorie, pomocniczo",
     ]]
     for item in calc_data.get("PIT_ZG_Attachments", []):
         zg_rows.append([
@@ -810,33 +817,44 @@ def _polish_summary_csv(calc_data, metadata):
                 "Wartosc": value,
             })
     for item in calc_data.get("PIT_ZG_Position_Summary", []):
-        country = item.get("Kraj")
+        country = str(item.get("Kraj", "")).upper()
+        section = f"PIT/ZG (8), formularz dla kraju {country} — wklad IBKR"
         rows.extend([
             {
-                "Sekcja": f"Wklad IBKR do PIT/ZG (8), poz. 29-30 - {country}",
-                "Pole": "Poz. 29: dochod Art. 30b ust. 5a/5b (PLN)",
+                "Sekcja": section,
+                "Pole": "Poz. 6: pelna nazwa panstwa (wpisz nazwe odpowiadajaca kodowi z poz. 7)",
+                "Wartosc": f"UZUPELNIJ NAZWE DLA KODU {country}",
+            },
+            {
+                "Sekcja": section,
+                "Pole": "Poz. 7: dwuliterowy kod panstwa (ISO)",
+                "Wartosc": country,
+            },
+            {
+                "Sekcja": section,
+                "Pole": "Poz. 29: dochod z art. 30b ust. 5a/5b (PLN) — przepisz do PIT/ZG",
                 "Wartosc": item.get("Poz_29_Dochod_Art30b_5a_5b_PLN"),
             },
             {
-                "Sekcja": f"Wklad IBKR do PIT/ZG (8), poz. 29-30 - {country}",
-                "Pole": "Poz. 30: podatek zagraniczny od dochodu z poz. 29, przed limitem (PLN)",
+                "Sekcja": section,
+                "Pole": "Poz. 30: podatek zaplacony za granica od dochodu z poz. 29 (PLN), przed limitem — przepisz do PIT/ZG",
                 "Wartosc": item.get("Poz_30_Podatek_zagraniczny_od_Poz_29_PLN"),
             },
         ])
     for item in calc_data.get("PIT_ZG_Attachments", []):
         zg_labels = {
-            "Kraj": "Kraj zrodla",
-            "Przychod_Art30b": "Przychod ze zbycia papierow (Art. 30b), PLN",
-            "Koszty_Art30b": "Koszt ze zbycia papierow (Art. 30b), PLN",
-            "Dochod_Art30b": "Dochod ze zbycia papierow (Art. 30b), PLN",
-            "Strata_Art30b": "Strata ze zbycia papierow (Art. 30b), PLN",
-            "Odsetki_Art30a": "Odsetki (Art. 30a), PLN",
-            "Dywidendy_Art30a": "Dywidendy (Art. 30a), PLN",
-            "Podatek_Zagraniczny": "Podatek zagraniczny — wszystkie kategorie (zestawienie pomocnicze), PLN",
+            "Kraj": "Kod kraju (PIT/ZG poz. 7)",
+            "Przychod_Art30b": "Art. 30b: przychod wspierajacy obliczenie PIT/ZG poz. 29 — nie odrebne pole formularza, PLN",
+            "Koszty_Art30b": "Art. 30b: koszty FIFO wspierajace obliczenie PIT/ZG poz. 29 — nie odrebne pole formularza, PLN",
+            "Dochod_Art30b": "Art. 30b: wynik netto wspierajacy PIT/ZG poz. 29, PLN",
+            "Strata_Art30b": "Art. 30b: strata pomocnicza; nie wykazuje sie jej w PIT/ZG poz. 29 jako dochodu, PLN",
+            "Odsetki_Art30a": "Odsetki Art. 30a — nie PIT/ZG; PIT-38 sekcja G, pozycje laczne 47–49, PLN",
+            "Dywidendy_Art30a": "Dywidendy Art. 30a — nie PIT/ZG; PIT-38 sekcja G, pozycje laczne 47–49, PLN",
+            "Podatek_Zagraniczny": "Podatek zagraniczny — wszystkie kategorie, pomocniczo; nie kopiuj jako PIT/ZG poz. 30, PLN",
         }
         for field, value in item.items():
             rows.append({
-                "Sekcja": f"Pomocnicze zestawienie wedlug kraju — nie formularz PIT/ZG ({item.get('Kraj')})",
+                "Sekcja": f"Szczegoly pomocnicze wedlug kraju — sprawdz mapowanie ({item.get('Kraj')})",
                 "Pole": zg_labels.get(field, field),
                 "Wartosc": value,
             })
