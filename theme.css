@@ -23,7 +23,7 @@
 [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p { color: var(--adatch-muted); }
 [data-testid="stSidebar"] hr { border-color: var(--adatch-line); margin: 1rem 0; }
 .brand-lockup { display:flex; align-items:center; gap:15px; padding: 0 0 1.25rem 0; margin-bottom: .45rem; border-bottom:1px solid var(--adatch-line); }
-.brand-mark { width:48px; height:48px; display:flex; align-items:center; justify-content:center; color:white; background:linear-gradient(145deg,#64748b,#334155); border-radius:15px; font-weight:800; font-size:20px; box-shadow:0 5px 12px rgba(51,65,85,.16); }
+.brand-mark { width:48px; height:48px; flex:0 0 48px; display:flex; align-items:center; justify-content:center; color:white; background:linear-gradient(145deg,#64748b,#334155); border-radius:15px; font-weight:800; font-size:20px; box-shadow:0 5px 12px rgba(51,65,85,.16); }
 .brand-name { min-width:0; max-width:260px; color:var(--adatch-ink); font-weight:760; font-size:18px; letter-spacing:-.4px; line-height:1.15; text-align:center; overflow-wrap:anywhere; }
 .terminal-tag { color: #64748b; font-size: 10px; letter-spacing: .16em; text-transform: uppercase; font-weight: 750; margin-bottom: 9px; }
 h1, h2, h3 { color: var(--adatch-ink); letter-spacing: -.035em; }
@@ -42,13 +42,38 @@ p, li { color: #4b5868; }
 .empty-panel { min-height:245px; border:1px dashed #d8e0e8; border-radius:16px; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:26px; color:var(--adatch-ink); background:rgba(255,255,255,.75); }
 .empty-panel p { color:var(--adatch-muted); max-width:330px; margin-bottom:0; }
 .empty-icon { font-size:30px; color:var(--adatch-steel); margin-bottom:10px; }
-[data-testid="stMetric"] { background:var(--adatch-surface); border:1px solid var(--adatch-line); padding:17px 18px; border-radius:16px; min-height:112px; box-shadow:0 4px 16px rgba(30,41,59,.035); }
-[data-testid="stMetric"] label { color:var(--adatch-muted) !important; font-size:.82rem !important; font-weight:600 !important; }
-[data-testid="stMetricValue"] { color:var(--adatch-ink); font-size:clamp(1.25rem, 1.6vw, 1.85rem) !important; font-weight:750 !important; letter-spacing:-.04em; }
+[data-testid="stMetric"] { background:var(--adatch-surface); border:1px solid var(--adatch-line); padding:17px 14px; border-radius:16px; min-height:112px; box-shadow:0 4px 16px rgba(30,41,59,.035); }
+[data-testid="stMetric"] label,
+[data-testid="stMetricLabel"],
+[data-testid="stMetric"] label p { color:var(--adatch-muted) !important; font-size:.8rem !important; font-weight:600 !important; line-height:1.25 !important; white-space:normal !important; overflow:visible !important; text-overflow:clip !important; }
+[data-testid="stMetricValue"] { color:var(--adatch-ink); font-size:clamp(1.1rem, 1.35vw, 1.55rem) !important; font-weight:750 !important; letter-spacing:-.04em; }
 [data-testid="stMetricDelta"] { font-weight:650; font-size:.8rem; }
 [data-testid="stPlotlyChart"] { background:#fff; border:1px solid var(--adatch-line); border-radius:16px; padding:10px 8px 1px; box-shadow:0 4px 16px rgba(30,41,59,.03); }
 div[data-testid="stDataFrame"] { border:1px solid var(--adatch-line); border-radius:14px; overflow:hidden; background:#fff; }
 [data-testid="stExpander"] { border:1px solid var(--adatch-line); border-radius:13px; background:#fff; }
+[data-testid="stIconMaterial"] { color:var(--adatch-steel) !important; }
+.st-key-ai_import_heading [data-testid="stIconMaterial"],
+.st-key-ai_results_expander summary [data-testid="stIconMaterial"]:first-of-type {
+  display:inline-flex !important; align-items:center; justify-content:center;
+  width:30px; height:30px; margin-right:7px; padding:5px; box-sizing:border-box;
+  border:1px solid #d8e0e8; border-radius:9px;
+  background:#edf1f5 !important; color:#475569 !important; font-size:18px !important;
+}
+.ai-section-heading { display:flex; align-items:center; gap:9px; color:#17212f; line-height:1.3; }
+.ai-section-heading strong { font-weight:650; }
+.ai-section-icon {
+  display:inline-flex !important; flex:0 0 30px; align-items:center; justify-content:center;
+  width:30px; height:30px; box-sizing:border-box; border:1px solid #d8e0e8 !important;
+  border-radius:9px; background:#edf1f5 !important; color:#475569 !important;
+}
+.ai-section-icon svg { display:block; width:18px; height:18px; background:transparent !important; }
+.ai-section-icon svg * { fill:none !important; stroke:#475569 !important; }
+/* Use app-owned SVGs and explicit slate colors so Streamlit/theme icon defaults
+   cannot reintroduce the pink and orange tiles. */
+.st-key-ai_import_heading .ai-section-icon,
+.ai-results-heading .ai-section-icon { background:#edf1f5 !important; }
+.st-key-ai_import_heading .ai-section-icon svg *,
+.ai-results-heading .ai-section-icon svg * { stroke:#475569 !important; }
 [data-testid="stTabs"] [data-baseweb="tab-list"] { gap:6px; border-bottom:1px solid var(--adatch-line); }
 [data-testid="stTabs"] button[data-baseweb="tab"] { color:#687588; font-weight:650; border-radius:9px 9px 0 0; }
 [data-testid="stTabs"] button[aria-selected="true"] { color:#334155; border-bottom-color:#64748b; }

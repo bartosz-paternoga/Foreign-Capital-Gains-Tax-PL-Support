@@ -12,6 +12,13 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from dotenv import load_dotenv
+from ai_assistance import (
+    OpenRouterExplanationError,
+    build_calculation_explanation_context,
+    build_import_explanation_context,
+    get_openrouter_config,
+    request_explanation,
+)
 from auth import render_auth_gate, render_account_sidebar
 from database import database_url
 from audit_exports import generate_csv as _generate_csv, generate_steps_csv as _generate_steps_csv
@@ -25,10 +32,18 @@ from xml.sax.saxutils import escape
 # Load environment variables from local .env file if present
 load_dotenv()
 
+def _read_streamlit_secret(name):
+    try:
+        return st.secrets.get(name, "")
+    except Exception:
+        return ""
+
+
 try:
-    from ibkr_parser import process_and_calculate_file
+    from ibkr_parser import inspect_ibkr_csv, process_and_calculate_file
     from account_reconciliation import parse_symbol_quantities
 except ImportError:
+    inspect_ibkr_csv = None
     process_and_calculate_file = None
     parse_symbol_quantities = None
 
@@ -39,6 +54,8 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+_OPENROUTER_CONFIG = get_openrouter_config(_read_streamlit_secret)
 
 # Match Investment Copilot's light slate design system and component styling.
 SHARED_THEME_CSS = Path(__file__).with_name("theme.css").read_text(encoding="utf-8")
@@ -108,7 +125,8 @@ _auth_token = str(st.session_state.get("auth_session_token", "") or "")
 _tax_scope_key = hashlib.sha256(_auth_token.encode("utf-8")).hexdigest() if _auth_token else "local"
 if st.session_state.get("_foreign_tax_scope_key") != _tax_scope_key:
     for _key in (
-        "calculated_data", "tax_year_used", "loss_cf_used",
+        "calculated_data", "tax_year_used", "loss_cf_used", "calculated_source_signature",
+        "audit_metadata", "audit_source_bytes",
         "lang_code", "tax_year_input", "loss_cf_input", "loss_cf_verified_input",
         "cash_currency_input", "cash_country_input", "source_country_input",
         "opening_units_input", "closing_units_input", "assume_zero_opening_input",
@@ -128,6 +146,12 @@ if "tax_year_used" not in st.session_state:
 if "loss_cf_used" not in st.session_state:
     st.session_state.loss_cf_used = 0.0
 
+IBKR_UPLOAD_TEMPLATE_CSV = (
+    "Date,Description,Transaction Type,Symbol,Quantity,Price,Price Currency,"
+    "Commission,Gross Amount,Net Amount,Flag\n"
+)
+
+
 TRANSLATIONS = {
     "EN": {
         "locale_header": "Choose Language",
@@ -140,9 +164,12 @@ TRANSLATIONS = {
         "target_year": "Target Filing Tax Year",
         "loss_cf": "Eligible prior PIT-38 loss deduction [PLN]",
         "loss_cf_verified": "I verified this loss is eligible for this tax year",
-        "cash_currency": "Currency for IBKR cash rows with no currency",
-        "cash_country": "Source country for IBKR cash interest and its withholding",
-        "source_countries": "Security source countries (ticker=ISO country, e.g. EGLN=IE)",
+        "cash_currency": "Currency fallback for IBKR cash rows with no currency",
+        "cash_currency_help": "Used only when a cash interest, dividend, or withholding row has no currency in the file or description. A currency shown on an individual security trade takes precedence.",
+        "cash_country": "Optional source country for IBKR cash interest and related withholding",
+        "cash_country_help": "Optional, and separate from the ticker map and cash currency. Applies to Credit Interest/Cash Interest and withholding rows described as interest. The app uses it to group amounts by country for PIT/ZG and its current foreign-tax-credit allocation. If blank, gross interest and Polish tax are still calculated, but country attribution needs review and related withholding is not credited. Verify the country from source records; do not assume it from IBKR's Irish office or the currency.",
+        "source_countries": "Optional security source-country mapping for PIT-ZG (TICKER=ISO, e.g. EGLN=IE)",
+        "source_countries_help": "This does not identify tickers or affect FIFO matching or aggregate PIT-38 Section C sale totals. It groups target-year sale amounts for PIT-ZG and assigns countries to security dividends/withholding for foreign-tax attribution. Map only securities with target-year sales, dividends, or withholding. If blank, aggregate calculations still run but country attribution is flagged for review; unmapped security withholding is not credited. Enter one TICKER=ISO2 pair per line. Verify the country independently; the ticker and mapping alone do not prove it.",
         "reconciliation_header": "Account Unit Reconciliation",
         "opening_units": "Opening units before earliest imported activity",
         "closing_units": "IBKR closing units at end of uploaded activity",
@@ -154,15 +181,70 @@ TRANSLATIONS = {
         "reconciliation_events": "Unit-changing IBKR activity",
         "file_header": "Data Import Source",
         "upload_label": "Upload IBKR Export CSV",
+        "upload_help": "Upload the original IBKR transaction-history CSV exactly as downloaded; no column changes are needed. FX conversion rows are excluded from PIT-38 and retained in the audit trail for review.",
+        "download_upload_template": "Download blank CSV template",
+        "upload_template_help": "Optional manual-entry format: one transaction per row. Keep the column headers. Original IBKR CSV exports can still be uploaded directly.",
+        "import_check_title": "Import Check",
+        "import_check_ready": "Required columns are mapped. Review the detected types and sample rows before calculating.",
+        "import_check_blocked": "Calculation is disabled until the required column or data issues below are resolved.",
+        "import_previous_result_cleared": "The uploaded file or import settings changed. Previous results were cleared; recalculate after reviewing this Import Check.",
+        "import_ack_mapping": "I reviewed and confirm the selected column mapping and sample rows.",
+        "ai_import_title": "AI help with import and settings",
+        "ai_results_title": "AI explanation of tax results",
+        "ai_results_open": "Open the AI question panel",
+        "ai_import_privacy": "Your question and up to 8 recent chat messages are sent with the import summary, the app guide, and selected safe settings (tax year, cash currency/country, whether loss/reconciliation inputs are set, and the count of security-country mappings). The app does not attach the CSV, preview rows, account number, ticker names or mapping text, or entered unit quantities; anything you type is sent. Chat stays in this app session. OpenRouter may route requests to providers with their own data policies.",
+        "ai_results_privacy": "Your question and up to 8 recent chat messages are sent with selected PLN summary figures, the app guide, and safe settings (tax year, cash currency/country, whether loss/reconciliation inputs are set, and the count of security-country mappings). The app does not attach the CSV, transaction ledger, account number, ticker names or mapping text, or entered unit quantities; anything you type is sent. Chat stays in this app session. OpenRouter may route requests to providers with their own data policies.",
+        "ai_import_consent": "I agree to send my question, recent messages, the app guide, safe settings and this import summary to OpenRouter.",
+        "ai_results_consent": "I agree to send my question, recent messages, the app guide, safe settings and these summary figures to OpenRouter.",
+        "ai_import_placeholder": "Ask about an import issue or app setting…",
+        "ai_import_examples": "Try: Explain every configuration parameter and what happens if I leave it blank.",
+        "ai_results_placeholder": "Ask about a PIT-38 position, warning or reconciliation status…",
+        "ai_results_examples": "Try: What does position 23 mean? Why is this marked for review?",
+        "ai_not_configured": "AI explanations are off until OPENROUTER_API_KEY is configured in this app's environment or Streamlit Secrets. OPENROUTER_MODEL defaults to openrouter/free.",
+        "ai_clear_chat": "Clear chat",
+        "ai_loading": "Getting an answer from OpenRouter...",
+        "ai_disclaimer": "AI-generated answers may be inaccurate. They do not change the app's calculations and are not tax advice.",
+        "import_format": "Detected format: {format}",
+        "import_rows": "Transaction rows: {count}",
+        "import_mapping_title": "Review or change column mapping",
+        "import_not_present": "Not present",
+        "import_select_column": "Select a column",
+        "import_selected_mapping": "Selected column mapping",
+        "import_types_title": "Detected transaction types",
+        "import_excluded_title": "Rows excluded from PIT-38 (kept in the audit trail)",
+        "import_preview_title": "Sample rows (including source row)",
+        "import_issues_title": "Import issues",
+        "import_ack_unknown": "I reviewed the {count} unrecognized security row(s) and understand they will not be included in FIFO tax calculations.",
+        "import_type_column": "Transaction type",
+        "import_type_rows": "Rows",
+        "import_issue_select_required": "Choose which CSV column contains {field}.",
+        "import_issue_ambiguous": "More than one CSV column may contain {field}; select the correct one.",
+        "import_issue_trade_column": "Trade rows are present. Map the {field} column.",
+        "import_issue_income_amount": "Interest or dividend rows are present. Map the gross income amount column.",
+        "import_issue_withholding_amount": "Withholding rows need a gross amount or net amount column.",
+        "import_issue_withholding_description": "A description column is needed to identify what foreign withholding relates to.",
+        "import_issue_bad_dates": "{count} row(s) have a missing or unreadable date: {rows}.",
+        "import_issue_row_symbol": "Row {row}: {action} has no ticker or symbol.",
+        "import_issue_row_value": "Row {row}: {action} is missing {field}.",
+        "import_issue_row_value_invalid": "Row {row}: {field} is not a valid number.",
+        "import_issue_row_amount_missing": "Row {row}: the income or withholding amount is blank.",
+        "import_issue_row_amount_invalid": "Row {row}: the income or withholding amount is not a valid number.",
+        "import_issue_row_currency": "Row {row}: currency is missing, invalid, or ambiguous. Check its column or select the account currency.",
+        "import_issue_gross_mismatch": "Row {row}: gross amount does not agree with quantity × price.",
+        "import_issue_net_mismatch": "Row {row}: net amount does not agree with gross amount minus commission.",
+        "import_issue_unknown_types": "{count} security row(s) use an unrecognized transaction type.",
+        "import_issue_mapping_missing": "The selected {field} column is not present in this file.",
         "btn_calculate": "Execute Tax Calculation",
         "msg_upload_first": "Upload your official IBKR CSV export file in the sidebar to initialize full tax analysis.",
         "awaiting_title": "Awaiting Data Import",
         "success_msg": "Calculation complete: {count} supported records processed. Verify holdings, instrument treatment, and other PIT-38 fields before filing.",
         "tab_sec_c": "PIT-38 Section C",
         "tab_sec_g": "Section G (Foreign Tax)",
-        "tab_pit_zg": "PIT-ZG Schedule",
+        "tab_pit_zg": "Country Income (Supplementary)",
         "tab_ledger": "Detailed FIFO Audit Ledger",
         "tab_warnings": "Execution Logs & Validation",
+        "excluded_activity_title": "Raw IBKR activity excluded from PIT-38",
+        "excluded_activity_note": "{count} raw activity rows were excluded from the PIT-38 calculations and are listed here. FX conversion rows are outside this PIT-38 calculation; this does not decide whether they need separate PIT reporting.",
         "sec_c_title": "IBKR-only Section C figures ({year})",
         "ibkr_section_c_note": "Use IBKR proceeds and costs in positions 22 and 23. Add Polish broker PIT-8C amounts in positions 20/21, then recalculate the combined totals and tax in positions 26–35. The other Section C figures shown here are IBKR-only references.",
         "rev_poz22": "Gross Revenue (Poz. 22)",
@@ -182,15 +264,25 @@ TRANSLATIONS = {
         "sec_g_title": "Section G: Passive Income & Foreign Tax Credit",
         "foreign_tax": "Foreign tax allowed as credit (Poz. 48)",
         "pl_tax": "Art. 30a tax due (Poz. 49)",
-        "pit_zg_title": "PIT/ZG Foreign Income Schedule",
+        "pit_zg_title": "PIT/ZG figures by country",
+        "pit_zg_scope_note": "The figures below show the app-calculated IBKR contribution to PIT/ZG positions 29–30, by country. This app cannot produce a completed official form: it contains only IBKR activity and does not collect the taxpayer identity fields required by the form. Verify the source country and tax treatment, then combine amounts from your other sources for the same country. The separate Art. 30a interest/dividend breakdown is supplementary and is not part of PIT/ZG positions 29–30.",
+        "pit_zg_country": "Country summary",
+        "pit_zg_country_column": "Country",
+        "pit_zg_fields_title": "PIT/ZG (8), Section C.3 — IBKR contribution to positions 29–30",
+        "pit_zg_pos29": "Position 29: Art. 30b (5a/5b) income (PLN)",
+        "pit_zg_pos30": "Position 30: foreign tax paid on position 29 income (PLN)",
+        "pit_zg_positions_note": "Position 30 is shown before the tax-credit limit, as requested by the form. This app does not calculate PIT/ZG positions 31–32 for foreign virtual-currency income. Confirm each country and amount against source documents before entering an official form.",
+        "pit_zg_supplement_title": "Additional IBKR income breakdown by country (supplementary)",
+        "pit_zg_form_link": "Official Ministry of Finance PIT/ZG (8) form",
+        "pit_zg_no_positions": "No mapped foreign securities income is available for positions 29–30. Check the ticker-country mapping and unresolved-country notes.",
         "no_zg": "No verified country attribution is available for this year; configure and verify PIT/ZG separately.",
         "ledger_title": "Detailed Transaction & NBP Rate Ledger",
         "ledger_sub": "Explicit currency separation, preceding business day NBP rate dates, and full mathematical exposure:",
         "export_title": "Download calculation reports (PDF, CSV & ZIP)",
         "export_intro": "Start with the summary. Use the detailed ledger to trace individual IBKR records and calculations. The complete report combines both for printing.",
         "summary_export_help": "A short overview of the IBKR-only PIT-38 figures and foreign tax credit. Download the complete report for transaction and review details.",
-        "ledger_export_help": "One row per calculated IBKR record, with its source CSV row, currency conversion, NBP reference, commission, and FIFO cost details.",
-        "complete_export_help": "One print-ready Polish report with the summary, reconciliation, review notes, every transaction calculation, and the NBP rate register.",
+        "ledger_export_help": "Calculated transactions include the source CSV row, currency conversion, NBP reference, commission, and FIFO cost. Excluded IBKR activity is listed separately.",
+        "complete_export_help": "One print-ready Polish report with the summary, reconciliation, review notes, transaction calculations, excluded activity, and the NBP rate register.",
         "btn_summary_pdf": "Download Summary Report (PDF)",
         "btn_summary_csv": "Download Summary Data (CSV)",
         "btn_ledger_pdf": "Download Detailed Audit Ledger (PDF)",
@@ -201,7 +293,12 @@ TRANSLATIONS = {
         "pdf_title": "PIT-38 Calculation Summary — {year}",
         "pdf_sub": "Interactive Brokers export | Prior loss deducted: {loss:.2f} PLN",
         "summary_pdf_disclaimer": "WORKING CALCULATION ONLY — check the source data and tax treatment before filing.",
-        "summary_pdf_scope": "This is an IBKR-only summary. The complete print-ready report contains transaction calculations, source-row references, reconciliation, and review notes.",
+        "summary_pdf_scope": "This is an IBKR-only summary. The country table gives candidate figures for PIT/ZG positions 29–30; verify country/tax treatment and add other sources. The complete print-ready report contains transaction calculations, source-row references, reconciliation, and review notes.",
+        "pdf_zg_heading": "PIT/ZG (8), section C.3 — IBKR contribution by country",
+        "pdf_zg_country": "Country",
+        "pdf_zg_pos29": "Position 29 income (PLN)",
+        "pdf_zg_pos30": "Position 30 tax paid abroad (PLN)",
+        "pdf_zg_note": "Candidate IBKR amounts only. Position 30 is before the credit limit. The app does not collect taxpayer identity, confirm source-country treatment, include other brokers, or calculate virtual-currency positions 31–32.",
         "pdf_sec_c_header": "PIT-38 Section C",
         "pdf_sec_g_header": "PIT-38 Section G (Foreign Tax Credit & Withholding)",
         "pdf_amount_header": "Amount (PLN)",
@@ -218,9 +315,12 @@ TRANSLATIONS = {
         "target_year": "Docelowy Rok Podatkowy",
         "loss_cf": "Kwalifikowana strata PIT-38 do odliczenia [PLN]",
         "loss_cf_verified": "Potwierdzam, że strata kwalifikuje się do odliczenia w tym roku",
-        "cash_currency": "Waluta operacji gotówkowych bez waluty w CSV",
-        "cash_country": "Kraj źródła odsetek gotówkowych IBKR i potrąconego od nich podatku",
-        "source_countries": "Kraje źródła papierów (ticker=kod kraju, np. EGLN=IE)",
+        "cash_currency": "Waluta zastępcza dla operacji gotówkowych bez waluty w CSV",
+        "cash_currency_help": "Używana tylko wtedy, gdy wiersz odsetek, dywidendy lub podatku u źródła nie podaje waluty w pliku ani opisie. Waluta podana przy konkretnej transakcji papieru ma pierwszeństwo.",
+        "cash_country": "Opcjonalny kraj źródła odsetek gotówkowych IBKR i powiązanego podatku",
+        "cash_country_help": "To ustawienie jest opcjonalne i niezależne od mapowania tickerów oraz waluty gotówkowej. Dotyczy wierszy Credit Interest/Cash Interest i podatku u źródła opisanego jako podatek od odsetek. Aplikacja grupuje te kwoty według kraju na potrzeby PIT/ZG i stosowanego w niej przypisania odliczenia podatku. Bez kraju nadal oblicza przychód brutto z odsetek i polski podatek, ale oznacza przypisanie do kraju do sprawdzenia i nie zalicza powiązanego podatku zagranicznego. Kraj potwierdź w dokumentach źródłowych; nie zakładaj go na podstawie irlandzkiej siedziby IBKR ani waluty.",
+        "source_countries": "Opcjonalne przypisanie kraju źródła papieru do PIT-ZG (TICKER=kod ISO, np. EGLN=IE)",
+        "source_countries_help": "To ustawienie nie rozpoznaje tickerów ani nie zmienia FIFO lub łącznych kwot sprzedaży w PIT-38 Sekcja C. Grupuje kwoty sprzedaży z bieżącego roku podatkowego do PIT-ZG i przypisuje kraje dywidendom oraz podatkowi pobranemu od papierów przy ustalaniu podatku zagranicznego. Wprowadź tylko papiery z istotną sprzedażą, dywidendą lub podatkiem w tym roku. Bez mapowania kwoty zbiorcze nadal zostaną obliczone, ale przypisanie kraju będzie wymagało sprawdzenia; nieprzypisany podatek od papieru nie jest odliczany. Wpisz po jednej parze TICKER=kod ISO2 w wierszu. Kraj zweryfikuj niezależnie — ticker i mapowanie same w sobie go nie potwierdzają.",
         "reconciliation_header": "Uzgodnienie liczby jednostek",
         "opening_units": "Liczba jednostek przed najwcześniejszą operacją w pliku",
         "closing_units": "Końcowa liczba jednostek według IBKR",
@@ -232,15 +332,70 @@ TRANSLATIONS = {
         "reconciliation_events": "Operacje IBKR zmieniające liczbę jednostek",
         "file_header": "Import Raportu IBKR",
         "upload_label": "Wgraj plik CSV z IBKR",
+        "upload_help": "Wgraj oryginalny plik CSV z historią transakcji IBKR bez zmian kolumn. Wiersze przewalutowań zostaną wykluczone z PIT-38 i zachowane w rejestrze audytowym do sprawdzenia.",
+        "download_upload_template": "Pobierz pusty szablon CSV",
+        "upload_template_help": "Opcjonalny format do ręcznego wprowadzania: jedna operacja w wierszu. Zachowaj nagłówki kolumn. Oryginalne pliki CSV z IBKR nadal można wgrywać bezpośrednio.",
+        "import_check_title": "Sprawdzenie importu",
+        "import_check_ready": "Wymagane kolumny są przypisane. Przed obliczeniem sprawdź typy operacji i przykładowe wiersze.",
+        "import_check_blocked": "Obliczenia są zablokowane do czasu uzupełnienia wymaganych kolumn lub poprawienia danych poniżej.",
+        "import_previous_result_cleared": "Zmieniono plik lub ustawienia importu. Poprzedni wynik usunięto; po sprawdzeniu importu wykonaj obliczenia ponownie.",
+        "import_ack_mapping": "Sprawdziłem(-am) i potwierdzam przypisanie kolumn oraz przykładowe wiersze.",
+        "ai_import_title": "Pomoc AI przy imporcie i ustawieniach",
+        "ai_results_title": "Wyjaśnienie wyników podatkowych przez AI",
+        "ai_results_open": "Otwórz panel pytań do AI",
+        "ai_import_privacy": "Do OpenRouter zostanie wysłane Twoje pytanie i do 8 ostatnich wiadomości czatu wraz z podsumowaniem importu, przewodnikiem po aplikacji oraz wybranymi bezpiecznymi ustawieniami (rok podatkowy, waluta/kraj gotówkowy, informacja o ustawieniu straty i uzgodnienia oraz liczba mapowań krajów papierów). Aplikacja nie dołącza pliku CSV, podglądu, numeru rachunku, nazw tickerów ani treści mapowań oraz wpisanych ilości jednostek; wszystko, co wpiszesz, zostanie wysłane. Czat pozostaje w bieżącej sesji. OpenRouter może przekazywać zapytania dostawcom stosującym własne zasady przetwarzania danych.",
+        "ai_results_privacy": "Do OpenRouter zostanie wysłane Twoje pytanie i do 8 ostatnich wiadomości czatu wraz ze zbiorczymi kwotami w PLN, przewodnikiem po aplikacji i bezpiecznymi ustawieniami (rok podatkowy, waluta/kraj gotówkowy, informacja o ustawieniu straty i uzgodnienia oraz liczba mapowań krajów papierów). Aplikacja nie dołącza pliku CSV, rejestru transakcji, numeru rachunku, nazw tickerów ani treści mapowań oraz wpisanych ilości jednostek; wszystko, co wpiszesz, zostanie wysłane. Czat pozostaje w bieżącej sesji. OpenRouter może przekazywać zapytania dostawcom stosującym własne zasady przetwarzania danych.",
+        "ai_import_consent": "Zgadzam się wysłać moje pytanie, ostatnie wiadomości, przewodnik aplikacji, bezpieczne ustawienia i podsumowanie importu do OpenRouter.",
+        "ai_results_consent": "Zgadzam się wysłać moje pytanie, ostatnie wiadomości, przewodnik aplikacji, bezpieczne ustawienia i te kwoty do OpenRouter.",
+        "ai_import_placeholder": "Zapytaj o import lub ustawienie aplikacji…",
+        "ai_import_examples": "Przykład: Wyjaśnij wszystkie parametry konfiguracji i co się stanie, gdy je pominę.",
+        "ai_results_placeholder": "Zapytaj o pozycję PIT-38, ostrzeżenie lub uzgodnienie…",
+        "ai_results_examples": "Przykład: Co oznacza pozycja 23? Dlaczego wynik wymaga sprawdzenia?",
+        "ai_not_configured": "Wyjaśnienia AI są wyłączone do czasu skonfigurowania OPENROUTER_API_KEY w środowisku tej aplikacji lub w Streamlit Secrets. Domyślny OPENROUTER_MODEL to openrouter/free.",
+        "ai_clear_chat": "Wyczyść czat",
+        "ai_loading": "Pobieranie odpowiedzi z OpenRouter...",
+        "ai_disclaimer": "Odpowiedzi wygenerowane przez AI mogą być niedokładne. Nie zmieniają obliczeń aplikacji i nie stanowią porady podatkowej.",
+        "import_format": "Rozpoznany format: {format}",
+        "import_rows": "Wiersze transakcji: {count}",
+        "import_mapping_title": "Sprawdź lub zmień przypisanie kolumn",
+        "import_not_present": "Brak",
+        "import_select_column": "Wybierz kolumnę",
+        "import_selected_mapping": "Wybrane przypisanie kolumn",
+        "import_types_title": "Rozpoznane typy operacji",
+        "import_excluded_title": "Wiersze wyłączone z PIT-38 (zachowane w rejestrze audytowym)",
+        "import_preview_title": "Przykładowe wiersze (z numerem źródłowym)",
+        "import_issues_title": "Problemy z importem",
+        "import_ack_unknown": "Sprawdziłem(-am) {count} nierozpoznanych wierszy papierów i rozumiem, że nie zostaną uwzględnione w obliczeniu FIFO.",
+        "import_type_column": "Typ transakcji",
+        "import_type_rows": "Wiersze",
+        "import_issue_select_required": "Wybierz kolumnę CSV zawierającą: {field}.",
+        "import_issue_ambiguous": "Więcej niż jedna kolumna może zawierać {field}; wybierz właściwą.",
+        "import_issue_trade_column": "W pliku są transakcje. Przypisz kolumnę: {field}.",
+        "import_issue_income_amount": "Są wiersze odsetek lub dywidend. Przypisz kolumnę kwoty przychodu brutto.",
+        "import_issue_withholding_amount": "Wiersze podatku u źródła wymagają kolumny kwoty brutto albo netto.",
+        "import_issue_withholding_description": "Potrzebna jest kolumna opisu, aby ustalić, czego dotyczy podatek zagraniczny.",
+        "import_issue_bad_dates": "{count} wierszy ma brakującą lub nieczytelną datę: {rows}.",
+        "import_issue_row_symbol": "Wiersz {row}: operacja {action} nie ma tickera ani symbolu.",
+        "import_issue_row_value": "Wiersz {row}: operacja {action} nie ma wartości w polu: {field}.",
+        "import_issue_row_value_invalid": "Wiersz {row}: pole {field} nie zawiera prawidłowej liczby.",
+        "import_issue_row_amount_missing": "Wiersz {row}: brakuje kwoty przychodu lub podatku u źródła.",
+        "import_issue_row_amount_invalid": "Wiersz {row}: kwota przychodu lub podatku u źródła nie jest prawidłową liczbą.",
+        "import_issue_row_currency": "Wiersz {row}: brakuje waluty albo jest nieprawidłowa lub niejednoznaczna. Sprawdź kolumnę lub wybierz walutę rachunku.",
+        "import_issue_gross_mismatch": "Wiersz {row}: kwota brutto nie zgadza się z ilością × ceną.",
+        "import_issue_net_mismatch": "Wiersz {row}: kwota netto nie zgadza się z kwotą brutto minus prowizja.",
+        "import_issue_unknown_types": "{count} wierszy papierów ma nierozpoznany typ operacji.",
+        "import_issue_mapping_missing": "Wybranej kolumny dla pola {field} nie ma w tym pliku.",
         "btn_calculate": "Uruchom Obliczenia Podatkowe",
         "msg_upload_first": "Proszę wgrać plik CSV z IBKR w panelu bocznym, aby rozpocząć przetwarzanie danych.",
         "awaiting_title": "Oczekiwanie na Import Danych",
         "success_msg": "Obliczenia zakończone: przetworzono {count} obsługiwanych rekordów. Przed złożeniem sprawdź historię, klasyfikację instrumentów i pozostałe pozycje PIT-38.",
         "tab_sec_c": "PIT-38 Sekcja C",
         "tab_sec_g": "Sekcja G (Podatek Zagraniczny)",
-        "tab_pit_zg": "Załącznik PIT-ZG",
+        "tab_pit_zg": "Dochody wg kraju (pomocnicze)",
         "tab_ledger": "Szczegółowy rejestr FIFO",
         "tab_warnings": "Dziennik Zdarzeń i Walidacja",
+        "excluded_activity_title": "Surowe operacje IBKR wyłączone z PIT-38",
+        "excluded_activity_note": "Z obliczeń PIT-38 wyłączono {count} surowych wierszy aktywności. Są wymienione poniżej. Wyłączenie przewalutowań z PIT-38 nie rozstrzyga, czy wymagają osobnego rozliczenia PIT.",
         "sec_c_title": "Wartości tylko z IBKR — Sekcja C ({year})",
         "ibkr_section_c_note": "Kwoty z IBKR wpisz jako wkład do poz. 22 (przychody) i 23 (koszty). Po dodaniu PIT-8C polskich brokerów w poz. 20/21 oblicz ponownie łączne wartości i podatek w poz. 26–35. Pozostałe wartości Sekcji C pokazane tutaj dotyczą wyłącznie IBKR.",
         "rev_poz22": "Przychód Brutto (Poz. 22)",
@@ -260,15 +415,25 @@ TRANSLATIONS = {
         "sec_g_title": "Sekcja G: Dochody Pasywne i Zapłacony Podatek za Granicą",
         "foreign_tax": "Uznany podatek zagraniczny (Poz. 48)",
         "pl_tax": "Podatek Art. 30a do zapłaty (Poz. 49)",
-        "pit_zg_title": "Załącznik PIT/ZG (Dochody Zagraniczne)",
+        "pit_zg_title": "Kwoty PIT/ZG według kraju",
+        "pit_zg_scope_note": "Poniższe kwoty pokazują obliczony przez aplikację wkład z IBKR do poz. 29–30 PIT/ZG, według kraju. Aplikacja nie tworzy kompletnego formularza urzędowego: obejmuje tylko aktywność z IBKR i nie zbiera danych identyfikacyjnych podatnika wymaganych w formularzu. Potwierdź kraj źródła i sposób opodatkowania, a następnie zsumuj kwoty z innych źródeł dla tego samego kraju. Oddzielne zestawienie odsetek i dywidend Art. 30a jest pomocnicze i nie należy do poz. 29–30 PIT/ZG.",
+        "pit_zg_country": "Zestawienie dla kraju",
+        "pit_zg_country_column": "Kraj",
+        "pit_zg_fields_title": "PIT/ZG (8), sekcja C.3 — wkład IBKR do poz. 29–30",
+        "pit_zg_pos29": "Poz. 29: dochód z art. 30b ust. 5a/5b (PLN)",
+        "pit_zg_pos30": "Poz. 30: podatek zapłacony za granicą od dochodu z poz. 29 (PLN)",
+        "pit_zg_positions_note": "Poz. 30 jest podawana przed zastosowaniem limitu odliczenia, zgodnie z formularzem. Aplikacja nie oblicza poz. 31–32 PIT/ZG dotyczących zagranicznych walut wirtualnych. Przed wpisaniem kwot do formularza urzędowego potwierdź kraj i kwoty w dokumentach źródłowych.",
+        "pit_zg_supplement_title": "Dodatkowe zestawienie dochodów z IBKR według kraju (pomocnicze)",
+        "pit_zg_form_link": "Urzędowy formularz PIT/ZG (8) Ministerstwa Finansów",
+        "pit_zg_no_positions": "Brak przypisanych do kraju dochodów z zagranicznych papierów dla poz. 29–30. Sprawdź mapowanie tickerów i uwagi o nierozstrzygniętym kraju.",
         "no_zg": "Brak potwierdzonej atrybucji kraju; skonfiguruj i zweryfikuj PIT/ZG osobno.",
         "ledger_title": "Szczegółowy rejestr transakcji i kursów NBP",
         "ledger_sub": "Każdy wiersz pokazuje operację, przeliczenie na PLN, kurs NBP i koszt FIFO.",
         "export_title": "Pobierz raporty z obliczeń (PDF, CSV i ZIP)",
         "export_intro": "Zacznij od podsumowania. Szczegółowy rejestr pozwala prześledzić każdą operację IBKR i jej obliczenie. Kompletny raport łączy oba dokumenty i nadaje się do wydruku.",
         "summary_export_help": "Krótkie podsumowanie kwot tylko z IBKR i odliczenia podatku zagranicznego. Szczegóły transakcji i uwagi znajdziesz w kompletnym raporcie.",
-        "ledger_export_help": "Jeden wiersz dla każdej uwzględnionej operacji IBKR: numer wiersza CSV, przeliczenie waluty, kurs NBP, prowizja i koszt FIFO.",
-        "complete_export_help": "Jeden polski dokument do wydruku: podsumowanie, uzgodnienie rachunku, uwagi, obliczenie każdej transakcji i rejestr kursów NBP.",
+        "ledger_export_help": "Uwzględnione transakcje zawierają numer wiersza CSV, przeliczenie waluty, kurs NBP, prowizję i koszt FIFO. Wykluczone operacje IBKR są pokazane osobno.",
+        "complete_export_help": "Jeden polski dokument do wydruku: podsumowanie, uzgodnienie rachunku, uwagi, obliczenia transakcji, wykluczone operacje i rejestr kursów NBP.",
         "btn_summary_pdf": "Pobierz podsumowanie obliczeń (PDF)",
         "btn_summary_csv": "Pobierz dane podsumowania (CSV)",
         "btn_ledger_pdf": "Pobierz szczegółowy rejestr audytowy (PDF)",
@@ -278,14 +443,159 @@ TRANSLATIONS = {
         "include_source_csv": "Dołącz oryginalny plik CSV z IBKR do pakietu",
         "pdf_title": "PIT-38 — podsumowanie obliczeń ({year})",
         "pdf_sub": "Dane z Interactive Brokers | Odliczona strata z lat ubiegłych: {loss:.2f} PLN",
-        "summary_pdf_disclaimer": "ZESTAWIENIE ROBOCZE — przed złożeniem sprawdź dane źródłowe i sposób rozliczenia podatkowego.",
-        "summary_pdf_scope": "To jest podsumowanie tylko danych z IBKR. Kompletny raport do wydruku zawiera obliczenia transakcji, numery wierszy źródłowych, uzgodnienie rachunku i uwagi.",
+        "summary_pdf_disclaimer": "ZESTAWIENIE POMOCNICZE — przed złożeniem sprawdź dane źródłowe i sposób rozliczenia podatkowego.",
+        "summary_pdf_scope": "To podsumowanie obejmuje tylko IBKR. Poniższa tabela według kraju pokazuje kandydackie kwoty do poz. 29–30 PIT/ZG; potwierdź kraj i sposób opodatkowania oraz dodaj inne źródła. Kompletny raport do wydruku zawiera obliczenia transakcji, numery wierszy źródłowych, uzgodnienie rachunku i uwagi.",
+        "pdf_zg_heading": "PIT/ZG (8), sekcja C.3 — wkład IBKR według kraju",
+        "pdf_zg_country": "Kraj",
+        "pdf_zg_pos29": "Dochód, poz. 29 (PLN)",
+        "pdf_zg_pos30": "Podatek zapłacony, poz. 30 (PLN)",
+        "pdf_zg_note": "Kandydackie kwoty tylko z IBKR. Poz. 30 jest przed limitem odliczenia. Aplikacja nie zbiera danych identyfikacyjnych, nie potwierdza kraju źródła i sposobu opodatkowania, nie uwzględnia innych brokerów ani nie oblicza poz. 31–32 dotyczących walut wirtualnych.",
         "pdf_sec_c_header": "Sekcja C PIT-38",
         "pdf_sec_g_header": "Sekcja G PIT-38 (odliczenie podatku zagranicznego)",
         "pdf_amount_header": "Kwota (PLN)",
         "pdf_ledger_header": "Szczegółowy rejestr FIFO i kursów NBP",
     }
 }
+
+IMPORT_ROLE_LABELS = {
+    "EN": {
+        "date": "date",
+        "transaction_type": "transaction type / action",
+        "symbol": "ticker / symbol",
+        "description": "description",
+        "quantity": "quantity",
+        "price": "price",
+        "currency": "currency",
+        "commission": "commission / fee",
+        "gross_amount": "gross or income amount",
+        "net_amount": "net amount",
+        "flag": "IBKR flag",
+    },
+    "PL": {
+        "date": "datę",
+        "transaction_type": "typ operacji",
+        "symbol": "ticker / symbol",
+        "description": "opis",
+        "quantity": "ilość",
+        "price": "cenę",
+        "currency": "walutę",
+        "commission": "prowizję / opłatę",
+        "gross_amount": "kwotę brutto lub przychodu",
+        "net_amount": "kwotę netto",
+        "flag": "oznaczenie IBKR",
+    },
+}
+
+
+def import_issue_text(issue, translation, lang_code):
+    role = IMPORT_ROLE_LABELS[lang_code].get(issue.get("Role"), "")
+    code = issue.get("Code")
+    if code == "select_required_column":
+        return translation["import_issue_select_required"].format(field=role)
+    if code == "ambiguous_column":
+        return translation["import_issue_ambiguous"].format(field=role)
+    if code == "trade_column_missing":
+        return translation["import_issue_trade_column"].format(field=role)
+    if code == "income_amount_missing":
+        return translation["import_issue_income_amount"]
+    if code == "withholding_amount_missing":
+        if issue.get("Row") is not None:
+            return translation["import_issue_row_amount_missing"].format(row=issue.get("Row"))
+        return translation["import_issue_withholding_amount"]
+    if code == "withholding_description_missing":
+        return translation["import_issue_withholding_description"]
+    if code == "bad_dates":
+        return translation["import_issue_bad_dates"].format(
+            count=issue.get("Count", 0),
+            rows=", ".join(map(str, issue.get("Rows", [])[:10])),
+        )
+    if code == "row_symbol_missing":
+        return translation["import_issue_row_symbol"].format(
+            row=issue.get("Row"), action=str(issue.get("Action", "transaction")).lower(),
+        )
+    if code == "row_value_missing":
+        return translation["import_issue_row_value"].format(
+            row=issue.get("Row"),
+            action=str(issue.get("Action", "transaction")).lower(),
+            field=role,
+        )
+    if code == "row_value_invalid":
+        return translation["import_issue_row_value_invalid"].format(
+            row=issue.get("Row"), field=role,
+        )
+    if code == "row_amount_missing":
+        return translation["import_issue_row_amount_missing"].format(row=issue.get("Row"))
+    if code == "row_amount_invalid":
+        return translation["import_issue_row_amount_invalid"].format(row=issue.get("Row"))
+    if code == "row_currency_invalid":
+        return translation["import_issue_row_currency"].format(row=issue.get("Row"))
+    if code == "gross_amount_mismatch":
+        return translation["import_issue_gross_mismatch"].format(row=issue.get("Row"))
+    if code == "net_amount_mismatch":
+        return translation["import_issue_net_mismatch"].format(row=issue.get("Row"))
+    if code == "unknown_transaction_types":
+        return translation["import_issue_unknown_types"].format(count=issue.get("Count", 0))
+    if code == "mapped_column_missing":
+        return translation["import_issue_mapping_missing"].format(field=role)
+    return issue.get("Issue", "")
+
+
+def render_ai_chat(kind, context, translation):
+    """Render a consent-gated, session-only chat grounded in a whitelisted summary."""
+    api_key = _OPENROUTER_CONFIG.get("api_key", "")
+    if not api_key:
+        st.caption(translation["ai_not_configured"])
+        return
+
+    signature = hashlib.sha256(
+        json.dumps(context, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()[:12]
+    prefix = f"ai_{kind}_{signature}"
+    history_key = f"{prefix}_messages"
+    active_signature_key = f"ai_{kind}_active_signature"
+    previous_signature = st.session_state.get(active_signature_key)
+    if previous_signature and previous_signature != signature:
+        st.session_state.pop(f"ai_{kind}_{previous_signature}_messages", None)
+    st.session_state[active_signature_key] = signature
+
+    st.caption(translation[f"ai_{kind}_privacy"])
+    consent = st.checkbox(translation[f"ai_{kind}_consent"], key=f"{prefix}_consent")
+    st.caption(translation["ai_disclaimer"])
+    st.caption(translation[f"ai_{kind}_examples"])
+
+    history = st.session_state.get(history_key, [])
+    for message in history:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    if history and st.button(translation["ai_clear_chat"], key=f"{prefix}_clear"):
+        st.session_state.pop(history_key, None)
+        st.rerun()
+
+    prompt = st.chat_input(
+        translation[f"ai_{kind}_placeholder"],
+        key=f"{prefix}_input",
+        max_chars=1200,
+        disabled=not consent,
+    )
+    if prompt and prompt.strip():
+        conversation = history + [{"role": "user", "content": prompt.strip()[:1200]}]
+        try:
+            with st.spinner(translation["ai_loading"]):
+                answer = request_explanation(
+                    context,
+                    api_key=api_key,
+                    model=_OPENROUTER_CONFIG.get("model", "openrouter/free"),
+                    conversation=conversation,
+                )
+        except OpenRouterExplanationError as exc:
+            st.error(str(exc))
+        else:
+            st.session_state[history_key] = (
+                conversation + [{"role": "assistant", "content": answer}]
+            )[-8:]
+            st.rerun()
+
 
 def clean_pdf_text(text: str) -> str:
     replacements = {
@@ -527,6 +837,34 @@ def generate_pdf(calc_data, tax_year, loss_cf, lang_code="EN"):
     story.append(Spacer(1, 4))
     story.append(Paragraph(clean_pdf_text(t["ibkr_section_g_note"]), styles["Normal"]))
     story.append(Paragraph(clean_pdf_text(t["summary_pdf_scope"]), styles["Italic"]))
+    story.append(Spacer(1, 6))
+    story.append(Paragraph(clean_pdf_text(t["pdf_zg_heading"]), styles["Heading2"]))
+    story.append(Paragraph(clean_pdf_text(t["pdf_zg_note"]), styles["Normal"]))
+    pit_zg_rows = [[
+        clean_pdf_text(t["pdf_zg_country"]),
+        clean_pdf_text(t["pdf_zg_pos29"]),
+        clean_pdf_text(t["pdf_zg_pos30"]),
+    ]]
+    for item in calc_data.get("PIT_ZG_Position_Summary", []):
+        pit_zg_rows.append([
+            clean_pdf_text(item.get("Kraj")),
+            f"{float(item.get('Poz_29_Dochod_Art30b_5a_5b_PLN', 0.0)):.2f}",
+            f"{float(item.get('Poz_30_Podatek_zagraniczny_od_Poz_29_PLN', 0.0)):.2f}",
+        ])
+    if len(pit_zg_rows) == 1:
+        pit_zg_rows.append([clean_pdf_text(t["pit_zg_no_positions"]), "—", "—"])
+    t3 = Table(pit_zg_rows, colWidths=[180, 300, 300])
+    t3.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#64748b')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f4f6f8')]),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#e1e6ec')),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+    ]))
+    story.append(t3)
     story.append(Spacer(1, 8))
     
     doc.build(story)
@@ -563,17 +901,19 @@ with st.sidebar:
         t["cash_currency"],
         ["Select currency...", "EUR", "USD", "GBP", "CHF", "PLN", "AUD", "CAD", "JPY", "SEK", "NOK", "DKK", "CZK", "HUF", "CNH", "ILS", "KRW", "MYR", "MXN", "NZD", "SAR", "SGD", "ZAR", "TRY", "AED"],
         key="cash_currency_input",
+        help=t["cash_currency_help"],
     )
     cash_country_choice = st.selectbox(
         t["cash_country"],
         ["Select country...", "IE", "US", "GB", "DE", "FR", "NL", "LU", "CH", "BE", "ES", "IT", "PL", "SE", "NO", "DK", "FI", "AT", "PT", "CA", "AU", "JP", "SG", "HK"],
         key="cash_country_input",
+        help=t["cash_country_help"],
     )
     source_country_text = st.text_input(
         t["source_countries"],
         value="",
         key="source_country_input",
-        help="Map each traded security to its verified source country. Leave blank only if you will verify PIT/ZG separately.",
+        help=t["source_countries_help"],
     )
 
     st.markdown("<hr>", unsafe_allow_html=True)
@@ -597,9 +937,197 @@ with st.sidebar:
     st.markdown("<hr>", unsafe_allow_html=True)
     st.markdown(f'<p class="sidebar-section-label">{t["file_header"]}</p>', unsafe_allow_html=True)
     uploaded_file = st.file_uploader(t["upload_label"], type=["csv"], label_visibility="collapsed", key="ibkr_csv_upload")
+    st.caption(t["upload_help"])
+    st.download_button(
+        t["download_upload_template"],
+        data=IBKR_UPLOAD_TEMPLATE_CSV,
+        file_name="IBKR_transaction_upload_template.csv",
+        mime="text/csv",
+        help=t["upload_template_help"],
+        use_container_width=True,
+        key="download_ibkr_upload_template",
+    )
+
+    source_file_bytes = uploaded_file.getvalue() if uploaded_file is not None else None
+    selected_cash_currency = None if cash_currency_choice.startswith("Select ") else cash_currency_choice
+    selected_cash_country = None if cash_country_choice.startswith("Select ") else cash_country_choice
+    source_country_mapping_count = sum(
+        1 for item in re.split(r"[,;\n]+", source_country_text) if "=" in item and item.split("=", 1)[0].strip()
+    )
+    ai_selected_settings = {
+        "target_tax_year": int(tax_year),
+        "cash_currency_fallback": selected_cash_currency,
+        "cash_interest_source_country": selected_cash_country,
+        "prior_year_loss_entered": bool(loss_carryforward),
+        "prior_year_loss_verified": bool(loss_carryforward_verified),
+        "security_country_mapping_count": source_country_mapping_count,
+        "opening_units_provided": bool(opening_units_text.strip()),
+        "closing_units_provided": bool(closing_units_text.strip()),
+        "assume_zero_opening_units": bool(assume_zero_opening),
+    }
+    selected_column_mapping = None
+    import_check = None
+    unrecognized_activity_acknowledged = True
+    import_mapping_confirmed = True
+    if uploaded_file is not None:
+        if inspect_ibkr_csv is None:
+            st.error("Import inspection is unavailable because ibkr_parser.py could not be imported.")
+            import_check = {"status": "error", "error": "Parser unavailable."}
+        else:
+            initial_check = inspect_ibkr_csv(source_file_bytes, cash_currency=selected_cash_currency)
+            if initial_check.get("status") == "error":
+                import_check = initial_check
+                st.error(initial_check.get("error", "The file could not be inspected."))
+            else:
+                file_key = hashlib.sha256(source_file_bytes).hexdigest()[:16]
+                role_labels = IMPORT_ROLE_LABELS[lang_code]
+                with st.expander(t["import_check_title"], expanded=True):
+                    st.caption(t["import_format"].format(format=initial_check["source_format"]))
+                    st.caption(t["import_rows"].format(count=initial_check["row_count"]))
+                    show_column_mapping = st.checkbox(
+                        t["import_mapping_title"],
+                        value=bool(initial_check.get("blocking_issues")),
+                        key=f"ibkr_show_mapping_{file_key}",
+                    )
+                    selected_column_mapping = {}
+                    if show_column_mapping:
+                        for role, suggestion in initial_check["suggestions"].items():
+                            options = [None] + initial_check["columns"]
+                            suggested = suggestion.get("suggested")
+                            index = options.index(suggested) if suggested in options else 0
+                            selected_column_mapping[role] = st.selectbox(
+                                role_labels[role],
+                                options,
+                                index=index,
+                                format_func=lambda value, required=suggestion["required"]: (
+                                    t["import_select_column"] if value is None and required
+                                    else t["import_not_present"] if value is None
+                                    else value
+                                ),
+                                key=f"ibkr_column_{file_key}_{role}",
+                            )
+                    else:
+                        selected_column_mapping = {
+                            role: suggestion.get("suggested")
+                            for role, suggestion in initial_check["suggestions"].items()
+                        }
+
+                    import_check = inspect_ibkr_csv(
+                        source_file_bytes,
+                        selected_column_mapping,
+                        cash_currency=selected_cash_currency,
+                    )
+                    mapped_rows = [{
+                        "Field": role_labels[role],
+                        "CSV column": column if column is not None else t["import_not_present"],
+                    } for role, column in import_check.get("column_mapping", {}).items()]
+                    st.dataframe(pd.DataFrame(mapped_rows), use_container_width=True, hide_index=True)
+
+                    if import_check.get("action_counts"):
+                        type_counts = pd.DataFrame(import_check["action_counts"]).rename(columns={
+                            "Transaction type": t["import_type_column"],
+                            "Rows": t["import_type_rows"],
+                        })
+                        st.markdown(f"**{t['import_types_title']}**")
+                        st.dataframe(type_counts, use_container_width=True, hide_index=True)
+
+                    if import_check.get("excluded_activity_summary"):
+                        excluded_counts = pd.DataFrame([
+                            {"Category": category, "Rows": count}
+                            for category, count in import_check["excluded_activity_summary"].items()
+                        ]).rename(columns={
+                            "Category": t["import_type_column"],
+                            "Rows": t["import_type_rows"],
+                        })
+                        st.markdown(f"**{t['import_excluded_title']}**")
+                        st.dataframe(excluded_counts, use_container_width=True, hide_index=True)
+
+                    if import_check.get("issues"):
+                        st.markdown(f"**{t['import_issues_title']}**")
+                        for issue in import_check["issues"]:
+                            message = import_issue_text(issue, t, lang_code)
+                            if issue.get("Severity") in {"Error", "Required", "Required for trades", "Required for income", "Required for withholding"}:
+                                st.error(message)
+                            else:
+                                st.warning(message)
+                    elif not import_check.get("blocking_issues"):
+                        st.success(t["import_check_ready"])
+
+                    if import_check.get("unknown_rows"):
+                        st.dataframe(pd.DataFrame(import_check["unknown_rows"]), use_container_width=True, hide_index=True)
+                        unrecognized_activity_acknowledged = st.checkbox(
+                            t["import_ack_unknown"].format(count=len(import_check["unknown_rows"])),
+                            key=f"ibkr_unknown_ack_{file_key}",
+                        )
+
+                    if import_check.get("preview") is not None and not import_check["preview"].empty:
+                        st.markdown(f"**{t['import_preview_title']}**")
+                        st.dataframe(import_check["preview"], use_container_width=True, hide_index=True, height=180)
+
+                    mapping_signature = hashlib.sha256(
+                        json.dumps(selected_column_mapping, sort_keys=True, ensure_ascii=False).encode("utf-8")
+                    ).hexdigest()[:10]
+                    import_mapping_confirmed = st.checkbox(
+                        t["import_ack_mapping"],
+                        key=f"ibkr_mapping_confirm_{file_key}_{mapping_signature}",
+                    )
+                    if import_check.get("blocking_issues"):
+                        st.warning(t["import_check_blocked"])
+
+                    with st.container(key="ai_import_heading"):
+                        st.markdown(
+                            f'<div class="ai-section-heading"><span class="ai-section-icon" aria-hidden="true">'
+                            '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">'
+                            '<path d="M12 3.5v4M12 16.5v4M3.5 12h4M16.5 12h4M5.99 5.99l2.83 2.83m6.36 6.36 2.83 2.83m0-12.02-2.83 2.83m-6.36 6.36-2.83 2.83" '
+                            'stroke="#475569" stroke-width="1.8" stroke-linecap="round"/>'
+                            '</svg></span><strong>' + escape(t["ai_import_title"]) + '</strong></div>',
+                            unsafe_allow_html=True,
+                        )
+                    render_ai_chat(
+                        "import",
+                        build_import_explanation_context(import_check, lang_code, settings=ai_selected_settings),
+                        t,
+                    )
+
+    import_input_signature = None
+    if source_file_bytes is not None:
+        import_input_signature = hashlib.sha256(json.dumps({
+            "file_sha256": hashlib.sha256(source_file_bytes).hexdigest(),
+            "column_mapping": selected_column_mapping,
+            "tax_year": int(tax_year),
+            "loss_carryforward": float(loss_carryforward),
+            "loss_carryforward_verified": bool(loss_carryforward_verified),
+            "cash_currency": selected_cash_currency,
+            "cash_country": None if cash_country_choice.startswith("Select ") else cash_country_choice,
+            "source_country_mapping": source_country_text.strip(),
+            "opening_units": opening_units_text.strip(),
+            "closing_units": closing_units_text.strip(),
+            "assume_zero_opening_units": bool(assume_zero_opening),
+        }, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+        stored_signature = st.session_state.get("calculated_source_signature")
+        if st.session_state.get("calculated_data") is not None and stored_signature != import_input_signature:
+            st.session_state.calculated_data = None
+            st.session_state.audit_metadata = None
+            st.session_state.audit_source_bytes = None
+            st.session_state.calculated_source_signature = None
+            st.info(t["import_previous_result_cleared"])
 
     st.markdown("<div style='height: 4px;'></div>", unsafe_allow_html=True)
-    if st.button(t["btn_calculate"], type="primary", use_container_width=True):
+    import_not_ready = bool(
+        uploaded_file is not None and (
+            import_check is None
+            or import_check.get("status") == "error"
+            or import_check.get("blocking_issues")
+            or not import_mapping_confirmed
+            or (import_check.get("unknown_rows") and not unrecognized_activity_acknowledged)
+        )
+    )
+    if st.button(
+        t["btn_calculate"],
+        type="primary",
+        use_container_width=True,
+        disabled=import_not_ready,
+    ):
         if uploaded_file is not None:
             if process_and_calculate_file is None:
                 st.markdown(f'<div class="custom-warning-box">Error: ibkr_parser.py could not be imported.</div>', unsafe_allow_html=True)
@@ -630,7 +1158,6 @@ with st.sidebar:
                     st.error(str(exc))
                     st.stop()
                 
-                source_file_bytes = uploaded_file.getvalue()
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp_file:
                     tmp_file.write(source_file_bytes)
                     tmp_path = tmp_file.name
@@ -648,6 +1175,7 @@ with st.sidebar:
                             opening_units_by_symbol=opening_units_map,
                             ibkr_closing_units_by_symbol=closing_units_map,
                             assume_zero_opening_units=assume_zero_opening,
+                            column_mapping=selected_column_mapping,
                         )
                         result_data = json.loads(result_json_str)
                         audit_metadata = {
@@ -658,6 +1186,12 @@ with st.sidebar:
                             "tax_year": int(tax_year),
                             "result_status": result_data.get("status"),
                             "processed_records": result_data.get("processed_records", 0),
+                            "source_format": result_data.get("source_format", "unknown"),
+                            "excluded_activity_summary": result_data.get("excluded_activity_summary", {}),
+                            "column_mapping": ", ".join(
+                                f"{role}={column if column is not None else 'not present'}"
+                                for role, column in (selected_column_mapping or {}).items()
+                            ),
                             "currency_country_settings": (
                                 f"waluta gotowkowa: {cash_currency_choice if not cash_currency_choice.startswith('Select ') else 'nieustawiona'}; "
                                 f"kraj odsetek: {cash_country_choice if not cash_country_choice.startswith('Select ') else 'nieustawiony'}"
@@ -677,6 +1211,7 @@ with st.sidebar:
                         }
                         st.session_state.audit_metadata = audit_metadata
                         st.session_state.audit_source_bytes = source_file_bytes
+                        st.session_state.calculated_source_signature = import_input_signature
                         if "pit38_calculation" in result_data:
                             result_data["pit38_calculation"]["Audit_Metadata"] = audit_metadata
                         st.session_state.calculated_data = result_data
@@ -728,6 +1263,24 @@ if st.session_state.calculated_data is not None:
         calc = data["pit38_calculation"]
         active_year = st.session_state.tax_year_used
         active_loss_cf = st.session_state.loss_cf_used
+
+        st.markdown(
+            f'<div class="ai-section-heading ai-results-heading"><span class="ai-section-icon" aria-hidden="true">'
+            '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">'
+            '<path d="M4 19.5h16M6.5 16V11m5 5V5m5 11v-7" stroke="#475569" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>'
+            '</svg></span><strong>' + escape(t["ai_results_title"]) + '</strong></div>',
+            unsafe_allow_html=True,
+        )
+        with st.expander(
+            t["ai_results_open"],
+            key="ai_results_expander",
+            expanded=False,
+        ):
+            render_ai_chat(
+                "results",
+                build_calculation_explanation_context(data, lang_code, settings=ai_selected_settings),
+                t,
+            )
         
         tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
             t["tab_sec_c"], 
@@ -772,10 +1325,25 @@ if st.session_state.calculated_data is not None:
 
         with tab3:
             st.markdown(f"#### {t['pit_zg_title']}")
+            st.info(t["pit_zg_scope_note"])
+            st.markdown(f"##### {t['pit_zg_fields_title']}")
+            pit_zg_positions = calc.get("PIT_ZG_Position_Summary", [])
+            if pit_zg_positions:
+                position_rows = [{
+                    t["pit_zg_country_column"]: item["Kraj"],
+                    t["pit_zg_pos29"]: item["Poz_29_Dochod_Art30b_5a_5b_PLN"],
+                    t["pit_zg_pos30"]: item["Poz_30_Podatek_zagraniczny_od_Poz_29_PLN"],
+                } for item in pit_zg_positions]
+                st.dataframe(pd.DataFrame(position_rows), use_container_width=True, hide_index=True)
+            else:
+                st.info(t["pit_zg_no_positions"])
+            st.caption(t["pit_zg_positions_note"])
+            st.markdown(f"[ {t['pit_zg_form_link']} ](https://podatki.gov.pl/media/jlvjafcd/pit_zg_-8-07-1.pdf)")
+            st.markdown(f"##### {t['pit_zg_supplement_title']}")
             pit_zg = calc["PIT_ZG_Attachments"]
             if pit_zg:
                 for item in pit_zg:
-                    st.markdown(f"**Country Schedule:** `{item['Kraj']}`")
+                    st.markdown(f"**{t['pit_zg_country']}:** `{item['Kraj']}`")
                     c1, c2, c3, c4 = st.columns(4)
                     c1.metric("Art. 30b proceeds", f"{item['Przychod_Art30b']:,.2f} PLN")
                     c2.metric("Art. 30b costs", f"{item['Koszty_Art30b']:,.2f} PLN")
@@ -845,6 +1413,12 @@ if st.session_state.calculated_data is not None:
                 st.markdown(f'<div class="custom-success-box">All imported rows and filing assumptions were resolved.</div>', unsafe_allow_html=True)
             else:
                 st.warning("Review unresolved source-country or loss-carryforward assumptions before using these figures.")
+            excluded_rows = calc.get("Excluded_Activity", [])
+            excluded_count = calc.get("Excluded_Activity_Summary", {}).get("total", len(excluded_rows))
+            if excluded_rows:
+                st.markdown(f"#### {t['excluded_activity_title']}")
+                st.info(t["excluded_activity_note"].format(count=excluded_count))
+                st.dataframe(pd.DataFrame(excluded_rows), use_container_width=True)
 
         with tab6:
             reconciliation = calc.get("Account_Reconciliation", {})

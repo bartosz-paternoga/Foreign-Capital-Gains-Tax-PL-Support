@@ -26,6 +26,8 @@ Use the same DATABASE_URL as Investment Copilot to share its account registry. W
 
 Uploaded CSVs and calculation results remain in the current Streamlit session; the app does not save a user's tax records to PostgreSQL.
 
+Optional AI chat is available for import questions before calculation and result questions after calculation. Each chat requires consent. Configure `OPENROUTER_API_KEY` in the server environment or Streamlit Secrets; `OPENROUTER_MODEL` defaults to `openrouter/free`. Each request sends the typed question, up to eight recent chat messages, a detailed guide to the app workflow/settings/calculations/reports, safe selected-setting indicators, and the relevant whitelisted import or result summary. The app does not attach the CSV, preview rows, ticker names or mapping text, account identifiers, or entered unit quantities; anything typed into a question is sent. Chat history stays in the current Streamlit session. OpenRouter may route requests to providers with different retention and training policies; review those policies before using chat. AI text does not affect calculations and is not included in tax-office exports.
+
 ## Local development
 
 For single-user local development without a PostgreSQL database:
@@ -40,6 +42,11 @@ Install dependencies with:
 
 ## Import and calculation safeguards
 
+- The Import Check runs before calculation. It shows the detected IBKR table, selected column mapping, transaction-type counts, sample source rows, and explicit FX/cash rows excluded from PIT-38. If a header is unfamiliar or ambiguous, select its meaning manually; calculation stays disabled while required columns or invalid dates are unresolved. Unrecognized security activity requires an explicit review acknowledgement and remains excluded/flagged.
+- The importer accepts IBKR transaction CSV layouts; it is not a universal parser for every broker or file type. Add and test a provider-specific adapter before using a different broker's export.
+- Upload the original IBKR transaction-history report CSV. The importer finds the embedded Transaction History table after the report preamble, reads it directly, and keeps the original CSV row references; no column rearranging or editing is needed. The existing normalized transaction CSV format is still supported.
+- An optional blank CSV upload template is available beside the upload control for manually prepared transaction files. Keep its headers and enter one transaction per row; original IBKR exports can still be uploaded directly.
+- Explicit IBKR `Forex Trade Component` currency-pair rows, `FX Translations P&L` adjustments, deposits, and withdrawals are left out of PIT-38 security and investment-income calculations and listed in the excluded-activity audit schedule. Excluding a row from this PIT-38 calculation does not decide whether the underlying currency exchange has a separate tax treatment; review that separately before filing.
 - The importer processes the selected CSV only. It does not substitute another file when the requested file is missing.
 - Buy and sell directions prefer IBKR's Transaction Type field. Transactions are ordered by date, and a sale exceeding the available FIFO holdings stops the run.
 - The Account Reconciliation tab tracks opening units, buys, sells, incoming/outgoing transfers, reported corporate-action unit changes, calculated closing units, IBKR closing units, and the difference by ticker. Enter opening and IBKR closing quantities in the sidebar as `SYMBOL=quantity`; quantities may be fractional. If the upload starts from a verified zero position, confirm the zero-opening checkbox.
@@ -56,6 +63,7 @@ Install dependencies with:
 - Confirm each security's Polish tax classification and source-country treatment against the instrument documents and applicable rules before relying on a PIT/ZG summary.
 - PDF and CSV working papers include transaction math with NBP rate/effective date, the passive-tax credit cap, account-unit events and reconciliation, and unresolved review notes.
 - The Polish tax-office support ZIP adds a print-ready PDF dossier with a full transaction ledger and NBP rate appendix, plus matching CSV schedules. It includes an IBKR source-file SHA-256 fingerprint, source-record references, PIT-38/PIT-ZG contribution tables, unit reconciliation, and translated review notes. Including the original IBKR CSV is optional.
+- The app and exports show IBKR-only candidate figures for PIT/ZG(8) section C.3 positions 29–30 by country, alongside a separate supplementary Art. 30a interest/dividend breakdown. These figures are not a completed official form: confirm source-country treatment and combine other sources for each country before preparing the official PIT/ZG. Positions 31–32 for virtual-currency income are outside the app's scope.
 - The complete print-ready dossier PDF is also available as a standalone download, alongside the summary and detailed CSV files.
 - The dossier is a supporting working paper, not an official PIT-38/PIT-ZG form or a replacement for IBKR statements, trade confirmations, tax vouchers, position snapshots, or corporate-action/transfer records. Keep the source documents and provide them if requested.
 

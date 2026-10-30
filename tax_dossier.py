@@ -31,6 +31,7 @@ from reportlab.platypus import (
 
 
 MF_PIT38_URL = "https://www.podatki.gov.pl/podatki-osobiste/pit/formularze-pit/"
+MF_PITZG_FORM_URL = "https://podatki.gov.pl/media/jlvjafcd/pit_zg_-8-07-1.pdf"
 NBP_API_URL = "https://api.nbp.pl/"
 RECONCILIATION_STATUS_PL = {
     "MATCH": "ZGODNE",
@@ -191,6 +192,58 @@ def transaction_ledger_table(calc_data, lang_code="PL"):
     ]))
     return table
 
+
+def _polish_excluded_reason(item):
+    return {
+        "FX conversion component": "Wiersz skladowy przewalutowania IBKR; wykluczono z tej kalkulacji PIT-38. Raport nie rozstrzyga odrebnego opodatkowania wymiany walut.",
+        "FX translation adjustment": "Korekta przeliczeniowa IBKR; nie ujeta jako transakcja papierem wartosciowym ani przychod z odsetek lub dywidend w PIT-38.",
+        "Cash deposit": "Wplata na rachunek; nie jest przychodem ze sprzedazy papierow wartosciowych ani odsetkami lub dywidenda.",
+        "Cash withdrawal": "Wyplata z rachunku; nie jest przychodem ze sprzedazy papierow wartosciowych ani odsetkami lub dywidenda.",
+    }.get(item.get("Category"), item.get("Reason excluded from PIT-38", ""))
+
+
+def excluded_activity_table(calc_data, lang_code="PL"):
+    """Show imported IBKR activity omitted from the PIT-38 calculation."""
+    if lang_code == "PL":
+        labels = ["Data", "Wiersz CSV", "Typ IBKR", "Kategoria", "Symbol", "Opis z IBKR", "Powod wykluczenia"]
+    else:
+        labels = ["Date", "CSV row", "IBKR type", "Category", "Symbol", "IBKR description", "Reason excluded"]
+
+    header_style = ParagraphStyle(
+        f"ExcludedHeader{lang_code}", fontName=PDF_BOLD, fontSize=6.7, leading=8,
+        textColor=colors.white,
+    )
+    cell_style = ParagraphStyle(
+        f"ExcludedCell{lang_code}", fontName=PDF_FONT, fontSize=6.5, leading=7.8,
+        textColor=colors.HexColor("#17212f"),
+    )
+    rows = [[Paragraph(label, header_style) for label in labels]]
+    for item in calc_data.get("Excluded_Activity", []):
+        reason = _polish_excluded_reason(item) if lang_code == "PL" else item.get("Reason excluded from PIT-38", "")
+        values = [
+            item.get("Date", "—"), item.get("Source row", "—"),
+            item.get("IBKR transaction type", "—"), item.get("Category", "—"),
+            item.get("Symbol") or "—", item.get("Description") or "—", reason,
+        ]
+        rows.append([Paragraph(_pdf_safe(value), cell_style) for value in values])
+
+    if len(rows) == 1:
+        rows.append([Paragraph("Brak aktywnosci wykluczonej z PIT-38.", cell_style)] + [Paragraph("—", cell_style) for _ in labels[1:]])
+
+    table = LongTable(rows, colWidths=[17 * mm, 17 * mm, 30 * mm, 34 * mm, 18 * mm, 70 * mm, 91 * mm], repeatRows=1, hAlign="LEFT")
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#52647c")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f2f5f8")]),
+        ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#d5dde7")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 3),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    return table
+
+
 def generate_ledger_pdf(calc_data, tax_year, lang_code="EN"):
     """Export the transaction ledger as a separate, print-friendly A4 landscape PDF."""
     buffer = io.BytesIO()
@@ -230,6 +283,23 @@ def generate_ledger_pdf(calc_data, tax_year, lang_code="EN"):
         Paragraph(_pdf_safe(intro), intro_style),
         transaction_ledger_table(calc_data, lang_code),
     ]
+    excluded = calc_data.get("Excluded_Activity", [])
+    if excluded:
+        if lang_code == "PL":
+            excluded_heading = "Aktywnosc z pliku IBKR wykluczona z obliczen PIT-38"
+            excluded_intro = "Ponizsze wiersze pozostaja w rejestrze audytowym, ale nie wchodza do obliczen PIT-38. Samo wykluczenie nie rozstrzyga odrebnego opodatkowania wymiany walut."
+        else:
+            excluded_heading = "IBKR activity excluded from PIT-38 calculations"
+            excluded_intro = "These source rows remain in the audit trail but are not included in the PIT-38 calculation. Their separate tax treatment is not determined here."
+        story.extend([
+            Spacer(1, 10),
+            Paragraph(_pdf_safe(excluded_heading), ParagraphStyle(
+                f"ExcludedTitle{lang_code}", parent=styles["Heading2"], fontName=PDF_BOLD,
+                fontSize=11, leading=13, textColor=colors.HexColor("#17212f"), spaceAfter=4,
+            )),
+            Paragraph(_pdf_safe(excluded_intro), intro_style),
+            excluded_activity_table(calc_data, lang_code),
+        ])
 
     def footer(canvas, _doc):
         canvas.saveState()
@@ -363,6 +433,9 @@ def generate_dossier_pdf(calc_data, metadata=None):
             "error": "obliczenia przerwane",
         }.get(metadata.get("result_status"), metadata.get("result_status", "Nie zapisano"))],
         ["Wiersze obsluzone przez kalkulator", metadata.get("processed_records", "—")],
+        ["Wiersze wykluczone z obliczen PIT-38", calc_data.get("Excluded_Activity_Summary", {}).get("total", 0)],
+        ["Format pliku IBKR", calc_data.get("Source_Format", "Nie rozpoznano")],
+        ["Mapowanie kolumn CSV", metadata.get("column_mapping", "Nie zapisano")],
         ["Ustawienia walut/krajow", metadata.get("currency_country_settings", "Nie zapisano")],
         ["Mapowanie tickerow na kraje", metadata.get("source_country_mapping", "Nie zapisano")],
         ["Stany otwarcia / zamkniecia", metadata.get("unit_snapshot_settings", "Nie zapisano")],
@@ -391,8 +464,45 @@ def generate_dossier_pdf(calc_data, metadata=None):
     ]
     story.extend([Spacer(1, 7), _table(passive_rows, [36 * mm, 37 * mm, 101 * mm], 6.8)])
 
-    story.append(Paragraph("2. Dochody przypisane do krajow (PIT-ZG — zestawienie pomocnicze)", heading))
-    zg_rows = [["Kraj", "Przychod Art. 30b", "Koszt Art. 30b", "Odsetki", "Dywidendy", "Podatek za granica"]]
+    story.append(Paragraph("2. Wklad danych IBKR do PIT/ZG (8), sekcja C.3 — poz. 29–30", heading))
+    story.append(Paragraph(
+        "To kwoty obliczone przez aplikacje dla danych IBKR i kraju wskazanego w mapowaniu. Poz. 29 pokazuje "
+        "dodatni wynik ze sprzedazy papierow (przychody minus koszty FIFO) przypisany do kraju; poz. 30 "
+        "pokazuje podatek zagraniczny oznaczony w danych jako dotyczacy zyskow kapitalowych, przed limitem odliczenia. "
+        "To nie jest uzupelniony formularz urzedowy: aplikacja obejmuje tylko IBKR i nie zbiera danych identyfikacyjnych "
+        "podatnika. Potwierdz kraj zrodla i kwalifikacje podatkowa oraz dodaj dane innych brokerow dla tego samego kraju. "
+        "Poz. 31–32 dotyczace walut wirtualnych nie sa obliczane przez ten kalkulator.", small,
+    ))
+    story.append(Paragraph(
+        f'<link href="{MF_PITZG_FORM_URL}" color="#475569">Aktualny formularz PIT/ZG (8) Ministerstwa Finansow</link>',
+        small,
+    ))
+    position_rows = [[
+        "Kraj", "Poz. 29 — dochod Art. 30b ust. 5a/5b (PLN)",
+        "Poz. 30 — podatek od dochodu z poz. 29 (PLN)",
+    ]]
+    for item in calc_data.get("PIT_ZG_Position_Summary", []):
+        position_rows.append([
+            item.get("Kraj"),
+            _money(item.get("Poz_29_Dochod_Art30b_5a_5b_PLN")),
+            _money(item.get("Poz_30_Podatek_zagraniczny_od_Poz_29_PLN")),
+        ])
+    if len(position_rows) == 1:
+        position_rows.append(["Brak przypisanych kwot do poz. 29–30.", "—", "—"])
+    story.append(_table(position_rows, [28 * mm, 92 * mm, 92 * mm], 6.5))
+    story.append(Spacer(1, 7))
+
+    story.append(Paragraph(
+        "Dodatkowe zestawienie dochodow wedlug kraju (pomocnicze; nie sa to pola PIT/ZG)", heading,
+    ))
+    story.append(Paragraph(
+        "Ponizsza tabela pokazuje szerszy podzial danych IBKR, w tym odsetki i dywidendy Art. 30a. "
+        "Nie nalezy traktowac jej jako pol formularza PIT/ZG.", small,
+    ))
+    zg_rows = [[
+        "Kraj", "Przychod Art. 30b", "Koszt Art. 30b", "Odsetki", "Dywidendy",
+        "Podatek zagraniczny — wszystkie kategorie (pomocniczy)",
+    ]]
     for item in calc_data.get("PIT_ZG_Attachments", []):
         zg_rows.append([
             item.get("Kraj"), _money(item.get("Przychod_Art30b")), _money(item.get("Koszty_Art30b")),
@@ -502,7 +612,20 @@ def generate_dossier_pdf(calc_data, metadata=None):
         ),
     ])
     story.append(transaction_ledger_table(calc_data, "PL"))
-    story.extend([Spacer(1, 8), Paragraph("8. Rejestr kursow NBP uzytych w obliczeniach", heading)])
+    if calc_data.get("Excluded_Activity"):
+        story.extend([
+            PageBreak(),
+            Paragraph("8. Operacje z IBKR wykluczone z obliczen PIT-38", ledger_heading),
+            Paragraph(
+                "Ponizsze wiersze zachowano w rejestrze zrodlowym i wykluczono z obliczen PIT-38. "
+                "Nie oznacza to rozstrzygniecia ich odrebnego traktowania podatkowego; w szczegolnosci "
+                "raport nie ocenia, czy rzeczywista wymiana walut wymaga osobnego wykazania.",
+                body,
+            ),
+            excluded_activity_table(calc_data, "PL"),
+        ])
+    rate_section_number = 9 if calc_data.get("Excluded_Activity") else 8
+    story.extend([Spacer(1, 8), Paragraph(f"{rate_section_number}. Rejestr kursow NBP uzytych w obliczeniach", heading)])
     story.append(Paragraph(
         "Numer tabeli i link odnosza sie do opublikowanych danych NBP; lista transakcji wskazuje, "
         "ktore rekordy wykorzystaly dany kurs.", body
@@ -613,6 +736,17 @@ def _polish_ledger_csv(calc_data):
             "Wiersz CSV IBKR": event.get("Row"),
             "Uwzgledniono w uzgodnieniu": event.get("Included"),
         })
+    for item in calc_data.get("Excluded_Activity", []):
+        rows.append({
+            "Rodzaj rekordu": "Aktywnosc wykluczona z PIT-38",
+            "Data": item.get("Date"),
+            "Wiersz zrodlowego CSV IBKR": str(item.get("Source row", "")),
+            "Typ transakcji IBKR": item.get("IBKR transaction type"),
+            "Kategoria": item.get("Category"),
+            "Ticker / symbol": item.get("Symbol"),
+            "Opis z IBKR": item.get("Description"),
+            "Powod wykluczenia": _polish_excluded_reason(item),
+        })
     for note in _review_notes(calc_data):
         rows.append({
             "Rodzaj rekordu": "Uwaga do sprawdzenia",
@@ -630,6 +764,9 @@ def _polish_summary_csv(calc_data, metadata):
         {"Sekcja": "Metadane", "Pole": "SHA-256 pliku", "Wartosc": metadata.get("source_sha256")},
         {"Sekcja": "Metadane", "Pole": "Data utworzenia", "Wartosc": metadata.get("generated_at")},
         {"Sekcja": "Metadane", "Pole": "Rok podatkowy", "Wartosc": metadata.get("tax_year")},
+        {"Sekcja": "Metadane", "Pole": "Wiersze wykluczone z obliczen PIT-38", "Wartosc": calc_data.get("Excluded_Activity_Summary", {}).get("total", 0)},
+        {"Sekcja": "Metadane", "Pole": "Format pliku IBKR", "Wartosc": calc_data.get("Source_Format")},
+        {"Sekcja": "Metadane", "Pole": "Mapowanie kolumn CSV", "Wartosc": metadata.get("column_mapping")},
     ]
     position_fields = [
         ("22", "Przychod z danych IBKR", "Inne_przychody_Poz_22"),
@@ -672,6 +809,20 @@ def _polish_summary_csv(calc_data, metadata):
                 "Pole": credit_labels.get(field, field),
                 "Wartosc": value,
             })
+    for item in calc_data.get("PIT_ZG_Position_Summary", []):
+        country = item.get("Kraj")
+        rows.extend([
+            {
+                "Sekcja": f"Wklad IBKR do PIT/ZG (8), poz. 29-30 - {country}",
+                "Pole": "Poz. 29: dochod Art. 30b ust. 5a/5b (PLN)",
+                "Wartosc": item.get("Poz_29_Dochod_Art30b_5a_5b_PLN"),
+            },
+            {
+                "Sekcja": f"Wklad IBKR do PIT/ZG (8), poz. 29-30 - {country}",
+                "Pole": "Poz. 30: podatek zagraniczny od dochodu z poz. 29, przed limitem (PLN)",
+                "Wartosc": item.get("Poz_30_Podatek_zagraniczny_od_Poz_29_PLN"),
+            },
+        ])
     for item in calc_data.get("PIT_ZG_Attachments", []):
         zg_labels = {
             "Kraj": "Kraj zrodla",
@@ -681,10 +832,14 @@ def _polish_summary_csv(calc_data, metadata):
             "Strata_Art30b": "Strata ze zbycia papierow (Art. 30b), PLN",
             "Odsetki_Art30a": "Odsetki (Art. 30a), PLN",
             "Dywidendy_Art30a": "Dywidendy (Art. 30a), PLN",
-            "Podatek_Zagraniczny": "Podatek zagraniczny, PLN",
+            "Podatek_Zagraniczny": "Podatek zagraniczny — wszystkie kategorie (zestawienie pomocnicze), PLN",
         }
         for field, value in item.items():
-            rows.append({"Sekcja": f"PIT-ZG - {item.get('Kraj')}", "Pole": zg_labels.get(field, field), "Wartosc": value})
+            rows.append({
+                "Sekcja": f"Pomocnicze zestawienie wedlug kraju — nie formularz PIT/ZG ({item.get('Kraj')})",
+                "Pole": zg_labels.get(field, field),
+                "Wartosc": value,
+            })
 
     reconciliation = calc_data.get("Account_Reconciliation", {})
     rows.append({"Sekcja": "Uzgodnienie jednostek", "Pole": "Status calosciowy", "Wartosc": RECONCILIATION_STATUS_PL.get(reconciliation.get("Status"), reconciliation.get("Status"))})
@@ -728,6 +883,29 @@ def _nbp_rates_csv(calc_data):
     return pd.DataFrame(rows).to_csv(index=False, sep=";", decimal=",", encoding="utf-8-sig").encode("utf-8-sig")
 
 
+def _polish_excluded_activity_csv(calc_data):
+    rows = [{
+        "Data": item.get("Date"),
+        "Wiersz zrodlowego CSV IBKR": str(item.get("Source row", "")),
+        "Typ transakcji IBKR": item.get("IBKR transaction type"),
+        "Kategoria": item.get("Category"),
+        "Ticker / symbol": item.get("Symbol"),
+        "Opis z IBKR": item.get("Description"),
+        "Powod wykluczenia z obliczen PIT-38": _polish_excluded_reason(item),
+    } for item in calc_data.get("Excluded_Activity", [])]
+    if not rows:
+        rows = [{
+            "Data": "",
+            "Wiersz zrodlowego CSV IBKR": "",
+            "Typ transakcji IBKR": "",
+            "Kategoria": "Brak wykluczonych wierszy",
+            "Ticker / symbol": "",
+            "Opis z IBKR": "",
+            "Powod wykluczenia z obliczen PIT-38": "",
+        }]
+    return pd.DataFrame(rows).to_csv(index=False, sep=";", encoding="utf-8-sig").encode("utf-8-sig")
+
+
 def generate_audit_package(
     calc_data, metadata=None, original_csv=None, include_original=False, dossier_pdf=None,
 ):
@@ -748,6 +926,7 @@ def generate_audit_package(
         archive.writestr(f"02_Rejestr_obliczen_IBKR_{year}.csv", _polish_ledger_csv(calc_data))
         archive.writestr(f"03_Podsumowanie_PIT38_PITZG_{year}.csv", _polish_summary_csv(calc_data, metadata))
         archive.writestr(f"04_Rejestr_kursow_NBP_{year}.csv", _nbp_rates_csv(calc_data))
+        archive.writestr(f"05_Wiersze_wylaczone_z_PIT38_{year}.csv", _polish_excluded_activity_csv(calc_data))
 
         readme = [
             "PAKIET DOKUMENTOW POMOCNICZYCH DO PIT-38 / PIT-ZG",
@@ -761,6 +940,7 @@ def generate_audit_package(
             "02 - Szczegolowy rejestr transakcji, wierszy IBKR, kursow NBP i obliczen FIFO.",
             "03 - Podsumowanie wartosci pomocniczych PIT-38/PIT-ZG i nierozstrzygnietych kwestii.",
             "04 - Rejestr unikalnych kursow NBP z data, numerem tabeli i linkiem do zrodla.",
+            "05 - Surowe wiersze IBKR wykluczone z obliczen PIT-38, z numerami wierszy i powodami.",
             "",
             "DOKUMENTY, KTORYCH TEN PAKIET NIE ZASTEPUJE",
             "Zachowaj oryginalny raport IBKR, potwierdzenia transakcji, zestawienia pozycji otwarcia/zamkniecia,",
@@ -775,6 +955,6 @@ def generate_audit_package(
         if source_bytes is not None:
             original_name = os.path.basename(metadata.get("source_file") or "IBKR_source.csv")
             safe_name = "".join(char for char in original_name if char.isalnum() or char in "-_.") or "IBKR_source.csv"
-            archive.writestr(f"05_Zrodlo_IBKR/{safe_name}", source_bytes)
+            archive.writestr(f"06_Zrodlo_IBKR/{safe_name}", source_bytes)
     buffer.seek(0)
     return buffer.getvalue()

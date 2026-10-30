@@ -37,6 +37,20 @@ def audit_result():
         "IBKR_Only_Illustrative_Tax_Estimate_Poz_35_and_49": 2.0,
         "PIT_ZG_Attachments": [],
         "Review_Notes": ["Verify this security's tax-country mapping."],
+        "Source_Format": "IBKR raw report CSV",
+        "Excluded_Activity_Summary": {
+            "total": 1,
+            "by_category": {"FX conversion component": 1},
+        },
+        "Excluded_Activity": [{
+            "Date": "2026-01-04",
+            "Source row": 7,
+            "IBKR transaction type": "Forex Trade Component",
+            "Category": "FX conversion component",
+            "Symbol": "EUR.PLN",
+            "Description": "Net Amount in Base from Forex Trade",
+            "Reason excluded from PIT-38": "Excluded from this PIT-38 calculation; separate tax treatment is not determined.",
+        }],
         "Account_Reconciliation": {
             "Status": "MISMATCH",
             "Formula": "Opening + buys - sells = calculated close",
@@ -102,6 +116,8 @@ class AuditExportTests(unittest.TestCase):
         )
         self.assertIn("source-country", credit_rule)
         self.assertIn("tax-country mapping", values[("Unresolved assumption / review", "Note 1")])
+        self.assertEqual(values[("PIT-38 import scope", "Raw activity rows excluded from PIT-38 calculations")], "1")
+        self.assertIn("Activity excluded from PIT-38", {row["Category"] for row in rows})
 
     def test_transaction_ledger_csv_keeps_rate_formula_and_audit_context(self):
         rows = list(csv.DictReader(io.StringIO(generate_steps_csv(audit_result()).decode("utf-8"))))
@@ -110,6 +126,7 @@ class AuditExportTests(unittest.TestCase):
         transfer_row = next(row for row in rows if row["Record type"] == "Unit event")
         credit_row = next(row for row in rows if row["Record type"] == "Tax-credit cap audit")
         note_row = next(row for row in rows if row["Record type"] == "Unresolved assumption / review")
+        excluded_row = next(row for row in rows if row["Record type"] == "Activity excluded from PIT-38")
 
         self.assertEqual(tax_row["Data Kursu NBP / NBP Date"], "2026-01-02")
         self.assertEqual(tax_row["Kurs NBP / NBP Rate"], "4.200000")
@@ -118,6 +135,7 @@ class AuditExportTests(unittest.TestCase):
         self.assertEqual(transfer_row["Unit event / Quantity"], "1.0")
         self.assertEqual(credit_row["Poz. 48 allowed credit (PLN)"], "10.0")
         self.assertIn("tax-country mapping", note_row["Review note"])
+        self.assertEqual(int(float(excluded_row["Excluded activity / Source row"])), 7)
 
     def test_polish_audit_package_contains_source_manifest_ledger_and_optional_statement(self):
         source = b"TradeDate,Symbol\n2026-01-03,EGLN\n"
@@ -137,7 +155,8 @@ class AuditExportTests(unittest.TestCase):
             self.assertIn("02_Rejestr_obliczen_IBKR_2026.csv", names)
             self.assertIn("03_Podsumowanie_PIT38_PITZG_2026.csv", names)
             self.assertIn("04_Rejestr_kursow_NBP_2026.csv", names)
-            self.assertIn("05_Zrodlo_IBKR/activity.csv", names)
+            self.assertIn("05_Wiersze_wylaczone_z_PIT38_2026.csv", names)
+            self.assertIn("06_Zrodlo_IBKR/activity.csv", names)
             printable_pdf = archive.read("01_Raport_i_pelny_rejestr_PIT38_IBKR_2026.pdf")
             self.assertTrue(printable_pdf.startswith(b"%PDF"))
             self.assertIn(b"595.2756 841.8898", printable_pdf)
@@ -147,6 +166,8 @@ class AuditExportTests(unittest.TestCase):
             ledger = archive.read("02_Rejestr_obliczen_IBKR_2026.csv").decode("utf-8-sig")
             self.assertIn("Wiersz zrodlowego CSV IBKR", ledger)
             self.assertIn("001/A/NBP/2026", ledger)
+            excluded = archive.read("05_Wiersze_wylaczone_z_PIT38_2026.csv").decode("utf-8-sig")
+            self.assertIn("EUR.PLN", excluded)
 
     def test_polish_audit_package_rejects_a_source_file_with_a_different_hash(self):
         metadata = {"source_sha256": hashlib.sha256(b"expected").hexdigest()}

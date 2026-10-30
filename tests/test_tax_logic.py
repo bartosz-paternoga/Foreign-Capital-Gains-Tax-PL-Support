@@ -1,4 +1,6 @@
 """Offline regression tests for the IBKR parser and PIT calculations."""
+import csv
+import io
 import json
 import tempfile
 import unittest
@@ -7,7 +9,7 @@ from unittest.mock import Mock, patch
 
 import requests
 
-from ibkr_parser import process_and_calculate_file
+from ibkr_parser import inspect_ibkr_csv, process_and_calculate_file
 from account_reconciliation import UnitReconciler, parse_symbol_quantities
 from nbp_service import NBPRate, NBPRateUnavailable, get_nbp_rate
 from tax_calculator import PIT38Calculator
@@ -23,6 +25,27 @@ def make_csv(rows, header=CSV_HEADER):
     content = header + "\n".join(rows) + "\n"
     handle = tempfile.NamedTemporaryFile(mode="w", suffix=".csv", encoding="utf-8", delete=False)
     handle.write(content)
+    handle.close()
+    return Path(handle.name)
+
+
+def make_raw_ibkr_report(rows):
+    """Build a raw IBKR report with its four-column preamble and row tags."""
+    content = io.StringIO()
+    writer = csv.writer(content)
+    writer.writerow(["Statement", "Header", "Field Name", "Field Value"])
+    writer.writerow(["Transaction History", "Data", "Title", "Transaction History"])
+    writer.writerow(["Summary", "Data", "Base Currency", "EUR"])
+    writer.writerow([
+        "Transaction History", "Header", "Date", "Account", "Description",
+        "Transaction Type", "Symbol", "Quantity", "Price", "Price Currency",
+        "Gross Amount ", "Commission", "Net Amount",
+    ])
+    for row in rows:
+        writer.writerow(["Transaction History", "Data", *row])
+
+    handle = tempfile.NamedTemporaryFile(mode="w", suffix=".csv", encoding="utf-8", newline="", delete=False)
+    handle.write(content.getvalue())
     handle.close()
     return Path(handle.name)
 
@@ -78,6 +101,187 @@ class ParserCalculationTests(unittest.TestCase):
         self.assertEqual(section_g["Podatek_zagraniczny_nierozliczony_PLN"], 0.0)
         self.assertEqual(section_g["Roznica_Poz_49"], 0)
         self.assertEqual(calc["IBKR_Only_Illustrative_Tax_Estimate_Poz_35_and_49"], 1)
+
+    def test_raw_ibkr_report_imports_embedded_table_and_audits_excluded_fx_rows(self):
+        path = make_raw_ibkr_report([
+            ["2026-01-02", "ACCOUNT", "ISHARES ETC", "Buy", "EGLN", "10", "10", "EUR", "-100", "-1", "-101"],
+            ["2026-03-10", "ACCOUNT", "ISHARES ETC", "Sell", "EGLN", "-2", "12", "EUR", "24", "-0.5", "23.5"],
+            ["2026-03-11", "ACCOUNT", "Net Amount in Base from Forex Trade: 0.2 EUR.PLN", "Forex Trade Component", "EUR.PLN", "1", "4", "PLN", "4", "-", "4"],
+            ["2026-03-11", "ACCOUNT", "FX Translations P&L", "Adjustment", "-", "-", "-", "-", "-", "-", "-"],
+            ["2026-03-12", "ACCOUNT", "Electronic Fund Transfer", "Deposit", "-", "-", "-", "-", "-", "-", "-"],
+            ["2026-03-13", "ACCOUNT", "EUR Credit Interest for Mar-2026", "Credit Interest", "-", "-", "-", "-", "0.97", "-", "0.97"],
+            ["2026-03-14", "ACCOUNT", "Withholding @ 20% on Credit Interest for Mar-2026", "Foreign Tax Withholding", "-", "-", "-", "-", "-", "-0.19", "-0.19"],
+            ["2026-03-15", "ACCOUNT", "Electronic Fund Transfer", "Withdrawal", "-", "-", "-", "-", "-", "-", "-"],
+        ])
+        self.addCleanup(path.unlink, missing_ok=True)
+
+        with patch("tax_calculator.get_nbp_rate", return_value=NBPRate(4.0, "2026-03-13")):
+            result = json.loads(process_and_calculate_file(
+                str(path),
+                tax_year=2026,
+                cash_currency="EUR",
+                cash_country="IE",
+                source_country_by_symbol={"EGLN": "IE"},
+                opening_units_by_symbol={"EGLN": 0},
+                ibkr_closing_units_by_symbol={"EGLN": 8},
+            ))
+
+        self.assertEqual(result["source_format"], "IBKR raw report CSV")
+        self.assertEqual(result["processed_records"], 4)
+        self.assertEqual(result["excluded_activity_summary"], {
+            "total": 4,
+            "by_category": {
+                "FX conversion component": 1,
+                "FX translation adjustment": 1,
+                "Cash deposit": 1,
+                "Cash withdrawal": 1,
+            },
+        })
+        calc = result["pit38_calculation"]
+        self.assertEqual(calc["Account_Reconciliation"]["Status"], "MATCH")
+        self.assertEqual({row["Ticker"] for row in calc["Account_Reconciliation"]["Rows"]}, {"EGLN"})
+        self.assertNotIn("EUR.PLN", {step["Ticker"] for step in calc["Calculation_Steps"]})
+        fx_row = next(row for row in calc["Excluded_Activity"] if row["Category"] == "FX conversion component")
+        self.assertEqual(fx_row["Source row"], 7)
+        self.assertTrue(any("does not determine whether any actual currency-exchange gain" in note for note in calc["Review_Notes"]))
+
+    def test_import_check_recognizes_raw_report_rows_and_previews_excluded_fx(self):
+        path = make_raw_ibkr_report([
+            ["2026-01-02", "ACCOUNT", "ISHARES ETC", "Buy", "EGLN", "10", "10", "EUR", "-100", "-1", "-101"],
+            ["2026-03-10", "ACCOUNT", "ISHARES ETC", "Sell", "EGLN", "-2", "12", "EUR", "24", "-0.5", "23.5"],
+            ["2026-03-11", "ACCOUNT", "Net Amount in Base from Forex Trade: 0.2 EUR.PLN", "Forex Trade Component", "EUR.PLN", "1", "4", "PLN", "4", "-", "4"],
+            ["2026-03-12", "ACCOUNT", "Electronic Fund Transfer", "Deposit", "-", "-", "-", "-", "-", "-", "-"],
+        ])
+        self.addCleanup(path.unlink, missing_ok=True)
+
+        check = inspect_ibkr_csv(path.read_bytes())
+
+        self.assertEqual(check["status"], "ready")
+        self.assertEqual(check["source_format"], "IBKR raw report CSV")
+        self.assertEqual(check["row_count"], 4)
+        self.assertEqual(
+            check["excluded_activity_summary"],
+            {"FX conversion component": 1, "Cash deposit": 1},
+        )
+        self.assertEqual(
+            {item["Transaction type"]: item["Rows"] for item in check["action_counts"]},
+            {"Buy": 1, "Sell": 1, "Forex Trade Component": 1, "Deposit": 1},
+        )
+        self.assertEqual(check["preview"].iloc[0]["Source row"], 5)
+
+    def test_import_check_allows_manual_mapping_of_unfamiliar_headers(self):
+        header = (
+            "Trade Date,Txn Side,Ticker Code,Details,Units,Execution Price,CCY,"
+            "Charges,Consideration,Cash Total\n"
+        )
+        path = make_csv([
+            "2026-01-02,Buy,EGLN,ISHARES ETC,10,10,EUR,-1,-100,-101",
+            "2026-03-10,Sell,EGLN,ISHARES ETC,2,12,EUR,-0.5,24,23.5",
+        ], header=header)
+        self.addCleanup(path.unlink, missing_ok=True)
+
+        automatic_check = inspect_ibkr_csv(path.read_bytes())
+        self.assertTrue(automatic_check["blocking_issues"])
+        mapping = {
+            "date": "Trade Date",
+            "transaction_type": "Txn Side",
+            "symbol": "Ticker Code",
+            "description": "Details",
+            "quantity": "Units",
+            "price": "Execution Price",
+            "currency": "CCY",
+            "commission": "Charges",
+            "gross_amount": "Consideration",
+            "net_amount": "Cash Total",
+            "flag": None,
+        }
+        reviewed_check = inspect_ibkr_csv(path.read_bytes(), mapping)
+        self.assertEqual(reviewed_check["blocking_issues"], [])
+        self.assertEqual(reviewed_check["status"], "ready")
+
+        result = json.loads(process_and_calculate_file(
+            str(path),
+            tax_year=2026,
+            cash_currency="EUR",
+            cash_country="IE",
+            source_country_by_symbol={"EGLN": "IE"},
+            opening_units_by_symbol={"EGLN": 0},
+            ibkr_closing_units_by_symbol={"EGLN": 8},
+            column_mapping=mapping,
+        ))
+        self.assertEqual(result["processed_records"], 2)
+        self.assertEqual(result["pit38_calculation"]["Account_Reconciliation"]["Status"], "MATCH")
+
+    def test_import_check_blocks_rows_with_unreadable_dates(self):
+        path = make_csv([
+            "Transaction History,not-a-date,ISHARES ETC,Buy,EGLN,10,10,EUR,-100,-1,-101",
+            "Transaction History,2026-01-03,ISHARES ETC,Buy,EGLN,10,10,EUR,-100,-1,-101",
+        ])
+        self.addCleanup(path.unlink, missing_ok=True)
+
+        check = inspect_ibkr_csv(path.read_bytes())
+
+        self.assertTrue(any(issue["Code"] == "bad_dates" for issue in check["issues"]))
+        self.assertTrue(check["blocking_issues"])
+        self.assertIn("2", check["issues"][-1]["Issue"])
+
+    def test_import_check_does_not_use_cash_currency_for_missing_trade_currency(self):
+        header = (
+            "Transaction History,Date,Description,Transaction Type,Symbol,Quantity,"
+            "Price,Gross Amount,Commission,Net Amount\n"
+        )
+        path = make_csv([
+            "Transaction History,2026-01-02,ISHARES ETC,Buy,EGLN,10,10,-100,-1,-101",
+        ], header=header)
+        self.addCleanup(path.unlink, missing_ok=True)
+
+        unresolved = inspect_ibkr_csv(path.read_bytes())
+        resolved = inspect_ibkr_csv(path.read_bytes(), cash_currency="EUR")
+
+        self.assertTrue(any(issue["Code"] == "row_currency_invalid" for issue in unresolved["issues"]))
+        self.assertTrue(unresolved["blocking_issues"])
+        self.assertTrue(any(issue["Code"] == "row_currency_invalid" for issue in resolved["issues"]))
+        self.assertTrue(resolved["blocking_issues"])
+
+    def test_import_check_allows_cash_currency_fallback_for_interest_rows(self):
+        header = (
+            "Transaction History,Date,Description,Transaction Type,Symbol,Quantity,"
+            "Price,Price Currency,Gross Amount,Commission,Net Amount\n"
+        )
+        path = make_csv([
+            "Transaction History,2026-01-02,Credit Interest,Credit Interest,-,-,-,-,0.97,-,0.97",
+        ], header=header)
+        self.addCleanup(path.unlink, missing_ok=True)
+
+        unresolved = inspect_ibkr_csv(path.read_bytes())
+        resolved = inspect_ibkr_csv(path.read_bytes(), cash_currency="EUR")
+
+        self.assertTrue(any(issue["Code"] == "row_currency_invalid" for issue in unresolved["issues"]))
+        self.assertEqual(resolved["blocking_issues"], [])
+
+    def test_import_check_requires_choice_when_multiple_columns_match_one_role(self):
+        header = (
+            "Transaction History,Date,Description,Transaction Type,Symbol,Quantity,"
+            "Price,Price Currency,Gross Amount,Amount,Commission,Net Amount\n"
+        )
+        path = make_csv([
+            "Transaction History,2026-01-02,ISHARES ETC,Buy,EGLN,10,10,EUR,-100,-100,-1,-101",
+        ], header=header)
+        self.addCleanup(path.unlink, missing_ok=True)
+
+        check = inspect_ibkr_csv(path.read_bytes())
+
+        self.assertTrue(any(issue["Code"] == "ambiguous_column" and issue["Role"] == "gross_amount" for issue in check["issues"]))
+        self.assertTrue(check["blocking_issues"])
+
+    def test_unrecognized_forex_trade_component_is_not_silently_excluded(self):
+        result = self.calculate_rows([
+            "Transaction History,01/02/2026,Unknown FX product,Forex Trade Component,EURUSD,1,1,EUR,1,-,1",
+            "Transaction History,01/03/2026,ISHARES ETC,Buy,EGLN,10,10,EUR,-100,-1,-101",
+        ])
+        self.assertEqual(result["status"], "needs_review")
+        self.assertEqual(result["pit38_calculation"]["Excluded_Activity"], [])
+        self.assertTrue(any("unsupported or unclear IBKR event type" in note for note in result["warnings"]))
 
     def test_ibkr_negative_sell_quantity_and_cashflow_commission_are_handled(self):
         result = self.calculate_rows([

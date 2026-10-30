@@ -479,6 +479,28 @@ class PIT38Calculator:
                 "Podatek_Zagraniczny": _money(data["foreign_tax"]),
             })
 
+        # PIT/ZG(8), section C.3, positions 29-30 concern foreign Art. 30b
+        # income and tax paid on that income. Keep the capital-gains withholding
+        # separate from Art. 30a dividend/interest withholding in this table.
+        # These are IBKR-only candidate contributions based on the user's
+        # source-country mappings, not a completed official form.
+        capital_gains_tax_by_country = self.foreign_tax_by_type_and_country["capital_gains"]
+        pit_zg_position_countries = {
+            country for country, data in self.source_income_by_country.items()
+            if data["capital_revenue"] or data["capital_cost"]
+        } | set(capital_gains_tax_by_country)
+        pit_zg_position_summary = []
+        for country in sorted(pit_zg_position_countries):
+            data = self.source_income_by_country.get(country, {})
+            country_net = _money(data.get("capital_revenue", 0.0) - data.get("capital_cost", 0.0))
+            pit_zg_position_summary.append({
+                "Kraj": country,
+                "Poz_29_Dochod_Art30b_5a_5b_PLN": _money(max(0.0, country_net)),
+                "Poz_30_Podatek_zagraniczny_od_Poz_29_PLN": _money(
+                    capital_gains_tax_by_country.get(country, 0.0)
+                ),
+            })
+
         section_c = {
             "Inne_przychody_Poz_22": revenue,
             "Koszty_uzyskania_Poz_23": costs,
@@ -516,6 +538,7 @@ class PIT38Calculator:
                 "Podatek_nalezny_Poz_35": capital_tax_due,
             },
             "PIT_ZG_Attachments": pit_zg,
+            "PIT_ZG_Position_Summary": pit_zg_position_summary,
             "Passive_Tax_Credit_Audit": {
                 "Formula": "By source country: credit before total cap = min(foreign tax paid, Polish tax attributable to that country's passive income); total Poz. 48 is then capped at Poz. 47.",
                 "Formula_PL": "W tym kalkulatorze limit dla kraju = 19% dochodow pasywnych z tego kraju, zaokraglone w gore do grosza. Odliczenie przed limitem lacznym = mniejsza z kwot: podatek zagraniczny zaplacony lub ten limit. Suma odliczen nie moze przekroczyc poz. 47.",
